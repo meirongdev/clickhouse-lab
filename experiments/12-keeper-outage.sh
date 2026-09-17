@@ -90,7 +90,9 @@ t_rw=$(wait_flag 0 120) || FAILED=1
 note "副本自己退出 readonly 用了约 ${t_rw}s，没做任何人工干预"
 expect "is_readonly 回到 0" "$(readonly_flag)" "0"
 expect "写入恢复（空 = 成功）" "$(q1 "INSERT INTO keeper_outage VALUES (4)" 2>&1 | head -1)" ""
-q1 "SYSTEM SYNC REPLICA keeper_outage" >/dev/null
+# SYSTEM SYNC REPLICA 只让「你连的那个节点」追上队列，对另外两个副本不起作用。
+# Keeper 刚恢复，ch2/ch3 还在追，所以三个节点都要各自 sync 一次再比行数（同实验 03）。
+for n in "${NODES[@]}"; do q "$n" "SYSTEM SYNC REPLICA keeper_outage" >/dev/null; done
 expect "停摆期间被拒那条没有偷偷补写进来" "$(q1 "SELECT count() FROM keeper_outage")" "3"
 expect "三个副本都看到一样的行数" \
   "$(q1 "SELECT uniqExact(c) FROM (

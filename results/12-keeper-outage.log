@@ -1,4 +1,4 @@
-# 跑于 2026-09-17 09:44:18 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab c56afe2
+# 跑于 2026-09-17 09:58:32 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 03b9e0f
 
 === 准备：一张普通的复制表，Keeper 还在的时候写得进去 ===
   [符合] 停 Keeper 之前的行数：2

@@ -1,4 +1,4 @@
-# 跑于 2026-09-17 09:55:37 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab ca6e16c
+# 跑于 2026-09-17 09:57:55 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 03b9e0f
 name	value
 database_atomic_delay_before_drop_table_sec	480
 name	engine
@@ -16,12 +16,12 @@ partition_id	reason
 
 === 二、FREEZE 之后 shadow/ 里躺着什么 ===
   · shadow/lab_recovery_probe 下的目录结构（只列到 part 一层）：
-    /var/lib/clickhouse/shadow/lab_recovery_probe/store/e50/e5032b64-90a1-4dd5-9c94-ef5a74e7bfd4
-    /var/lib/clickhouse/shadow/lab_recovery_probe/store/e50/e5032b64-90a1-4dd5-9c94-ef5a74e7bfd4/20260730_2_2_0
-    /var/lib/clickhouse/shadow/lab_recovery_probe/store/e50/e5032b64-90a1-4dd5-9c94-ef5a74e7bfd4/20260730_2_2_0/primary.cidx
-    /var/lib/clickhouse/shadow/lab_recovery_probe/store/e50/e5032b64-90a1-4dd5-9c94-ef5a74e7bfd4/20260730_2_2_0/data.bin
-    /var/lib/clickhouse/shadow/lab_recovery_probe/store/e50/e5032b64-90a1-4dd5-9c94-ef5a74e7bfd4/20260730_2_2_0/data.cmrk3
-    /var/lib/clickhouse/shadow/lab_recovery_probe/store/e50/e5032b64-90a1-4dd5-9c94-ef5a74e7bfd4/20260730_2_2_0/partition.dat
+    /var/lib/clickhouse/shadow/lab_recovery_probe/store/de9/de903e56-ded9-4758-a631-661174620cef
+    /var/lib/clickhouse/shadow/lab_recovery_probe/store/de9/de903e56-ded9-4758-a631-661174620cef/20260730_2_2_0
+    /var/lib/clickhouse/shadow/lab_recovery_probe/store/de9/de903e56-ded9-4758-a631-661174620cef/20260730_2_2_0/primary.cidx
+    /var/lib/clickhouse/shadow/lab_recovery_probe/store/de9/de903e56-ded9-4758-a631-661174620cef/20260730_2_2_0/data.bin
+    /var/lib/clickhouse/shadow/lab_recovery_probe/store/de9/de903e56-ded9-4758-a631-661174620cef/20260730_2_2_0/data.cmrk3
+    /var/lib/clickhouse/shadow/lab_recovery_probe/store/de9/de903e56-ded9-4758-a631-661174620cef/20260730_2_2_0/partition.dat
   [符合] shadow/ 里冻住的 part 数（表里有 2 个分区）：2
   · 冻的是 hardlink 不是拷贝，所以瞬间完成、当时不占额外空间；
   · 但它和原 part 共用 inode，原 part 被 merge 掉之后这份才真正占住磁盘。

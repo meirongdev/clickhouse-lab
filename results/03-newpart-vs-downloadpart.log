@@ -1,6 +1,6 @@
-# 跑于 2026-09-17 09:01:29 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab c4c1e9d
+# 跑于 2026-09-17 09:13:02 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 616aee6
 
-=== 开跑时间 2026-09-17 01:01:29（part_log 按这个时间过滤，躲开同名旧表的残留） ===
+=== 开跑时间 2026-09-17 01:13:02（part_log 按这个时间过滤，躲开同名旧表的残留） ===
 
 === 经 ch1 写入一个块 ===
   · 这个块叫 all_0_0_0

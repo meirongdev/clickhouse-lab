@@ -5,7 +5,11 @@
 #   这期间已经有超过 window 个新块把它顶出去了。
 #
 # 生产上窗口是 1000 个块、这张表每秒建 124 个块，折合 8 秒；重投间隔是 32 到 124 秒。
-# 本地把窗口压到 2 个块，用四次插入就能走完同一条路径。
+# 本地把窗口压到 2 个块，4 个不同的块（batch-A 加中间那 3 个）就能把窗口顶掉；
+# 算上三次原样重投，整个脚本一共发 7 条 INSERT。
+#
+# 这是唯一还用 on_all 的实验：三个副本各建各的表，正是要验它们共享同一套去重状态
+# （②那一步）。其余实验一律走 ON CLUSTER default。
 #
 # 顺带验一件生产数据看不到的事：blocks/ 的裁剪归 ReplicatedMergeTreeCleanupThread 周期性做
 # （cleanup_delay_period 默认 30 秒），不是插到第 window+1 个块就立刻顶掉。所以「块数超了」
@@ -24,7 +28,8 @@ on_all "DROP TABLE IF EXISTS events_dedup SYNC" >/dev/null
 on_all "CREATE TABLE events_dedup (id UInt32, v String)
         ENGINE = ReplicatedMergeTree('$ZKPATH','{replica}')
         ORDER BY id SETTINGS replicated_deduplication_window = 2"
-expect "活跃副本数" "$(q1 "SELECT active_replicas FROM system.replicas WHERE table='events_dedup'")" "3"
+expect "活跃副本数" "$(q1 "SELECT active_replicas FROM system.replicas
+                            WHERE database = currentDatabase() AND table='events_dedup'")" "3"
 
 count() { q1 "SYSTEM SYNC REPLICA events_dedup" >/dev/null; q1 "SELECT count() FROM events_dedup"; }
 insert_batch_a() { q "$1" "INSERT INTO events_dedup SETTINGS insert_deduplication_token='$TOKEN' VALUES (1,'a'),(2,'b')"; }

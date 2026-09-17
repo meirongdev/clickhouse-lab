@@ -1,7 +1,8 @@
-# 跑于 2026-09-17 09:01:30 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab c4c1e9d
+# 跑于 2026-09-17 09:13:03 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 616aee6
 
 === 分支一：原表路径是字面量 ===
   · 原表路径：/ch/tables/01/lit_src
+  · 克隆那条故意只在 ch1 上执行（不加 ON CLUSTER），要看的就是单个副本上会不会撞
   CREATE TABLE lit_clone AS lit_src 的返回：
     Code: 253. DB::Exception: Replica /ch/tables/01/lit_src/replicas/ch1 already exists. (REPLICA_ALREADY_EXISTS) (version 25.3.14.14 (official build))
   [符合] 当场报错，没有悄悄共用复制元数据
@@ -9,12 +10,12 @@
 === 分支二：原表路径里带 {uuid} ===
   · {uuid} 宏只在 ON CLUSTER + Atomic 库下可用，这一段走 ON CLUSTER
 table	zookeeper_path
-uuid_clone	/ch/tables/9fecb6be-49b8-4a43-9625-ae7711fd54f8/uuid_src
-uuid_src	/ch/tables/eeb85451-df9b-4f8a-8202-d52a9bb6db88/uuid_src
+uuid_clone	/ch/tables/c3b1a673-0640-4e04-8990-0dab174138c9/uuid_src
+uuid_src	/ch/tables/e50d501c-7836-45ad-8007-518d940e6508/uuid_src
   [符合] 两张表的 zookeeper_path 各不相同：2
 
 === runbook 跑之前该做的那条检查 ===
 table	zookeeper_path
 lit_src	/ch/tables/01/lit_src
-uuid_clone	/ch/tables/9fecb6be-49b8-4a43-9625-ae7711fd54f8/uuid_src
-uuid_src	/ch/tables/eeb85451-df9b-4f8a-8202-d52a9bb6db88/uuid_src
+uuid_clone	/ch/tables/c3b1a673-0640-4e04-8990-0dab174138c9/uuid_src
+uuid_src	/ch/tables/e50d501c-7836-45ad-8007-518d940e6508/uuid_src

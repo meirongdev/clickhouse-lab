@@ -39,7 +39,14 @@ LIMIT 20;
 
 ## 恢复动作
 
-- **副本在 Keeper 里残留。** `SYSTEM DROP REPLICA '<replica>'`。`DROP TABLE` 没加 `SYNC` 时，表已经不在 `system.tables` 里而 Keeper 里那个副本还在，要等 480 秒才走（lab 实测，实验 07）。补一条 `DROP TABLE IF EXISTS … SYNC` 是空跑，别指望它救场（偏差 E）。
+- **副本在 Keeper 里残留。** 表已经不在 `system.tables` 里了，得按 Keeper 路径删：
+
+  ```sql
+  SELECT getMacro('replica');   -- 副本名，下一条要用字面量
+  SYSTEM DROP REPLICA 'ch1' FROM ZKPATH '/ch/tables/01/<表名>';
+  ```
+
+  两个坑：副本名**不做宏替换**，写成 `'{replica}'` 不报错也不生效，是静默空跑（lab 实测，实验 07）；`DROP TABLE` 没加 `SYNC` 时补一条 `DROP TABLE IF EXISTS … SYNC` 同样是空跑，别指望它救场（偏差 E）。`database_atomic_delay_before_drop_table_sec` 默认 480 秒，等它自己过期这条没实测过（待一手观察）。
 - **换分区 runbook 挂在中途。** runbook 开头用 `DROP TABLE IF EXISTS … SYNC`，重跑从重建临时表开始。临时表复用上次没写完的内容是最难查的一类错。
 - **写重之后要清理。** 前置校验四条：两张表的 `zookeeper_path` 不同、`PARTITION ID` 带单引号、三副本同步（`queue_size` 与 `absolute_delay`）、分区静止（runbook 开头与 REPLACE 之前各数一次行数，不等就中止）。
 - **前置校验里 Keeper 路径那条的作用变了。** 实验 04 否掉了「克隆出来的表会和原表静默共用复制元数据」：路径写死成字面量时当场报 `REPLICA_ALREADY_EXISTS`，带 `{uuid}` 时各拿各的。这条检查的价值是在建表之前就知道会撞，不是防静默损坏（偏差 B）。

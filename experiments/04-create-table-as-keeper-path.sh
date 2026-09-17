@@ -15,10 +15,13 @@ provenance
 FAILED=0
 
 section "分支一：原表路径是字面量"
-on_all "DROP TABLE IF EXISTS lit_src SYNC" >/dev/null
-on_all "DROP TABLE IF EXISTS lit_clone SYNC" >/dev/null
-on_all "CREATE TABLE lit_src (id UInt32) ENGINE = ReplicatedMergeTree('/ch/tables/01/lit_src','{replica}') ORDER BY id"
-note "原表路径：$(q1 "SELECT zookeeper_path FROM system.replicas WHERE table='lit_src'" | tr -d '\n')"
+q1 "DROP TABLE IF EXISTS lit_src ON CLUSTER default SYNC" >/dev/null
+q1 "DROP TABLE IF EXISTS lit_clone ON CLUSTER default SYNC" >/dev/null
+q1 "CREATE TABLE lit_src ON CLUSTER default (id UInt32)
+    ENGINE = ReplicatedMergeTree('/ch/tables/01/lit_src','{replica}') ORDER BY id" >/dev/null
+note "原表路径：$(q1 "SELECT zookeeper_path FROM system.replicas
+                     WHERE database = currentDatabase() AND table='lit_src'" | tr -d '\n')"
+note "克隆那条故意只在 ch1 上执行（不加 ON CLUSTER），要看的就是单个副本上会不会撞"
 out=$(q1 "CREATE TABLE lit_clone AS lit_src" 2>&1)
 printf '  CREATE TABLE lit_clone AS lit_src 的返回：\n    %s\n' "$(echo "$out" | head -1)"
 case "$out" in
@@ -33,15 +36,20 @@ q1 "DROP TABLE IF EXISTS uuid_src ON CLUSTER default SYNC" >/dev/null
 q1 "DROP TABLE IF EXISTS uuid_clone ON CLUSTER default SYNC" >/dev/null
 q1 "CREATE TABLE uuid_src ON CLUSTER default (id UInt32) ENGINE = ReplicatedMergeTree('/ch/tables/{uuid}/uuid_src','{replica}') ORDER BY id" >/dev/null
 q1 "CREATE TABLE uuid_clone ON CLUSTER default AS uuid_src" >/dev/null
-q1 "SELECT table, zookeeper_path FROM system.replicas WHERE table IN ('uuid_src','uuid_clone') ORDER BY table FORMAT TSVWithNames"
-n=$(q1 "SELECT uniqExact(zookeeper_path) FROM system.replicas WHERE table IN ('uuid_src','uuid_clone')" | tr -d '\n')
+q1 "SELECT table, zookeeper_path FROM system.replicas
+    WHERE database = currentDatabase() AND table IN ('uuid_src','uuid_clone')
+    ORDER BY table FORMAT TSVWithNames"
+n=$(q1 "SELECT uniqExact(zookeeper_path) FROM system.replicas
+        WHERE database = currentDatabase() AND table IN ('uuid_src','uuid_clone')" | tr -d '\n')
 expect "两张表的 zookeeper_path 各不相同" "$n" "2"
 
 section "runbook 跑之前该做的那条检查"
-q1 "SELECT table, zookeeper_path FROM system.replicas WHERE table LIKE '%_src' OR table LIKE '%_clone' ORDER BY table FORMAT TSVWithNames"
+q1 "SELECT table, zookeeper_path FROM system.replicas
+    WHERE database = currentDatabase() AND (table LIKE '%_src' OR table LIKE '%_clone')
+    ORDER BY table FORMAT TSVWithNames"
 
-on_all "DROP TABLE IF EXISTS lit_src SYNC"   >/dev/null
-on_all "DROP TABLE IF EXISTS lit_clone SYNC" >/dev/null
+q1 "DROP TABLE IF EXISTS lit_src ON CLUSTER default SYNC"   >/dev/null
+q1 "DROP TABLE IF EXISTS lit_clone ON CLUSTER default SYNC" >/dev/null
 q1 "DROP TABLE IF EXISTS uuid_src ON CLUSTER default SYNC"  >/dev/null
 q1 "DROP TABLE IF EXISTS uuid_clone ON CLUSTER default SYNC" >/dev/null
 exit $FAILED

@@ -17,10 +17,19 @@ q1 "SELECT name, value, description FROM system.server_settings WHERE name='data
 
 # 这个实验会故意在 Keeper 里留下孤儿副本（那正是它要演示的东西），
 # 延迟期 480 秒内重跑会撞上。开头先用 SYSTEM DROP REPLICA 清干净。
+#
+# SYSTEM DROP REPLICA 的副本名必须是字面量：写 '{replica}' 不会做宏替换，而且不报错、
+# 也不生效，静静地什么都没做（lab 实测，见文件末尾那一节）。所以这里从服务端取真名。
+REPL=$(q1 "SELECT getMacro('replica')" | tr -d '\n')
+note "本节点的 replica 宏是 ${REPL}"
 for t in drop_plain drop_sync tmp_reuse; do
   q1 "DROP TABLE IF EXISTS $t SYNC" >/dev/null 2>&1
-  q1 "SYSTEM DROP REPLICA '{replica}' FROM ZKPATH '/ch/tables/01/$t'" >/dev/null 2>&1
-  q1 "SYSTEM DROP REPLICA 'ch1' FROM ZKPATH '/ch/tables/01/$t'" >/dev/null 2>&1
+  n=$(q1 "SELECT count() FROM system.zookeeper WHERE path='/ch/tables/01/$t/replicas'" 2>/dev/null)
+  is_num "$n" || n=0
+  if [ "$n" -gt 0 ]; then
+    note "清掉上一轮残留在 Keeper 里的副本：$t"
+    q1 "SYSTEM DROP REPLICA '$REPL' FROM ZKPATH '/ch/tables/01/$t'" >/dev/null
+  fi
 done
 
 mk() { q1 "CREATE TABLE $1 (id UInt32) ENGINE = ReplicatedMergeTree('/ch/tables/01/$1','{replica}') ORDER BY id" 2>&1; }
@@ -61,5 +70,21 @@ case "$out" in
 esac
 note "补救办法是 SYSTEM DROP REPLICA，或者等延迟期过去。runbook 里的正解是第一次就写 SYNC。"
 
-for t in drop_plain drop_sync tmp_reuse; do q1 "DROP TABLE IF EXISTS $t SYNC" >/dev/null 2>&1; done
+section "补救那条命令本身的一个坑：副本名不做宏替换"
+note "SYSTEM DROP REPLICA '{replica}' 不报错也不生效，是个静默空跑，必须写字面量"
+q1 "DROP TABLE IF EXISTS macro_check SYNC" >/dev/null 2>&1
+q1 "SYSTEM DROP REPLICA '$REPL' FROM ZKPATH '/ch/tables/01/macro_check'" >/dev/null 2>&1
+mk macro_check >/dev/null
+q1 "DROP TABLE macro_check" >/dev/null   # 不加 SYNC，故意在 Keeper 里留下副本
+before=$(q1 "SELECT arrayStringConcat(groupArray(name),',') FROM system.zookeeper WHERE path='/ch/tables/01/macro_check/replicas'" | tr -d '\n')
+out=$(q1 "SYSTEM DROP REPLICA '{replica}' FROM ZKPATH '/ch/tables/01/macro_check'" 2>&1)
+after=$(q1 "SELECT arrayStringConcat(groupArray(name),',') FROM system.zookeeper WHERE path='/ch/tables/01/macro_check/replicas'" | tr -d '\n')
+printf '  DROP 表之后 Keeper 里：%s\n  跑完 {replica} 那条之后：%s\n  那条命令的返回：%s\n' \
+  "$before" "$after" "${out:-（无输出，即成功）}"
+expect "用 {replica} 之后副本还在（说明是空跑）" "$after" "$before"
+q1 "SYSTEM DROP REPLICA '$REPL' FROM ZKPATH '/ch/tables/01/macro_check'" >/dev/null
+expect "换成字面量 '$REPL' 之后副本没了" \
+  "$(q1 "SELECT count() FROM system.zookeeper WHERE path='/ch/tables/01/macro_check/replicas'")" "0"
+
+for t in drop_plain drop_sync tmp_reuse macro_check; do q1 "DROP TABLE IF EXISTS $t SYNC" >/dev/null 2>&1; done
 exit $FAILED

@@ -18,7 +18,8 @@ q1 "CREATE TABLE part_syntax ON CLUSTER default (ts UInt64, id UInt32)
     PARTITION BY toYYYYMMDD(toDateTime(ts/1000)) ORDER BY ts" >/dev/null
 q1 "INSERT INTO part_syntax VALUES (1785369600000, 1)"
 note "分区键 toYYYYMMDD(toDateTime(ts/1000))，值是整数"
-q1 "SELECT partition, partition_id FROM system.parts WHERE table='part_syntax' AND active FORMAT TSVWithNames"
+q1 "SELECT partition, partition_id FROM system.parts
+    WHERE database = currentDatabase() AND table='part_syntax' AND active FORMAT TSVWithNames"
 
 # 服务端接受时 OPTIMIZE 没有输出，被拒时输出报错正文。
 zh() { [ "$1" = ok ] && echo 接受 || echo 拒绝; }
@@ -47,10 +48,12 @@ section "加了引号的分区表达式是真解析到那个分区，还是空�
 note "OPTIMIZE 成功与否看不出来，换 DETACH PARTITION：真解析到了，active part 会变 0"
 q1 "ALTER TABLE part_syntax DETACH PARTITION '20260730'" 2>&1 | head -1
 expect "DETACH PARTITION '20260730' 之后 active part 数" \
-  "$(q1 "SELECT count() FROM system.parts WHERE table='part_syntax' AND active")" "0"
+  "$(q1 "SELECT count() FROM system.parts
+         WHERE database = currentDatabase() AND table='part_syntax' AND active")" "0"
 q1 "ALTER TABLE part_syntax ATTACH PARTITION '20260730'" >/dev/null
 expect "ATTACH 回来之后" \
-  "$(q1 "SELECT count() FROM system.parts WHERE table='part_syntax' AND active")" "1"
+  "$(q1 "SELECT count() FROM system.parts
+         WHERE database = currentDatabase() AND table='part_syntax' AND active")" "1"
 
 note "结论：Int 型分区表达式加不加引号都能用，文档说的是 Date/Int 不「需要」引号，不是不许加。"
 note "分区 ID 那条是硬的，PARTITION ID 后面必须是字符串字面量。"

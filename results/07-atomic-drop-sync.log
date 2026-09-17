@@ -1,10 +1,12 @@
-# 跑于 2026-09-17 09:01:34 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab c4c1e9d
+# 跑于 2026-09-17 09:13:07 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 616aee6
 
 === 库引擎和延迟删除的配置 ===
 name	engine
 default	Atomic
 name	value	description
 database_atomic_delay_before_drop_table_sec	480	\n    The delay during which a dropped table can be restored using the [`UNDROP`](/sql-reference/statements/undrop.md) statement. If `DROP TABLE` ran with a `SYNC` modifier, the setting is ignored.\n    The default for this setting is `480` (8 minutes).\n    
+  · 本节点的 replica 宏是 ch1
+  · 清掉上一轮残留在 Keeper 里的副本：drop_plain
 
 === 路径 A：DROP（不加 SYNC）之后立刻建同名同路径的表 ===
   CREATE 的返回：Code: 253. DB::Exception: Replica /ch/tables/01/drop_plain/replicas/ch1 already exists. (REPLICA_ALREADY_EXISTS) (version 25.3.14.14 (official build))
@@ -24,3 +26,11 @@ database_atomic_delay_before_drop_table_sec	480	\n    The delay during which a d
   · 第二条是空跑，而 Keeper 里那个副本要等 database_atomic_delay_before_drop_table_sec 才消失。
   [符合] 补 SYNC 无效，仍然撞车
   · 补救办法是 SYSTEM DROP REPLICA，或者等延迟期过去。runbook 里的正解是第一次就写 SYNC。
+
+=== 补救那条命令本身的一个坑：副本名不做宏替换 ===
+  · SYSTEM DROP REPLICA '{replica}' 不报错也不生效，是个静默空跑，必须写字面量
+  DROP 表之后 Keeper 里：ch1
+  跑完 {replica} 那条之后：ch1
+  那条命令的返回：（无输出，即成功）
+  [符合] 用 {replica} 之后副本还在（说明是空跑）：ch1
+  [符合] 换成字面量 'ch1' 之后副本没了：0

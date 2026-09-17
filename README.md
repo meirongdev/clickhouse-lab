@@ -71,10 +71,12 @@ docs/                   日常排查用的知识，索引在 docs/README.md
 
 日常排查数据问题时要用的机制地图、排查顺序和巡检清单在 [docs/README.md](docs/README.md)，那边记的是「手上要有什么」，这边记的是「跑过什么」。
 
-`lib.sh` 里两个函数值得先看一眼：
+`lib.sh` 里几个函数值得先看一眼：
 
-- `on_all` 把一条 DDL 在三个节点各执行一遍。`ReplicatedMergeTree` 的 CREATE 不会自动传播到其他副本，早期版本的实验 02 就是因为只在 ch1 建表，跑成了单副本还以为是三副本。后来给集群开了 distributed DDL，新脚本用 `ON CLUSTER default`，`on_all` 留给不方便走 DDL 队列的地方。
-- `wait_znodes` 轮询 Keeper 里某个路径下的子节点数。判断「去重窗口有没有把旧块顶出去」只能轮询，理由见实验 02。
+- **建表走 `ON CLUSTER default`，这是默认规则。** 集群开了 distributed DDL（`cfg/cluster.xml`），八个实验里只有实验 02 例外，因为它要验的恰恰是「三个副本各建各的表，却共享同一套去重状态」，那一步必须绕开 DDL 队列。例外只此一处，脚本文件头写了理由。
+- `on_all` 就是那个例外用的：一条 DDL 在三个节点各跑一遍。`ReplicatedMergeTree` 的 CREATE 不会自动传播到其他副本，早期版本的实验 02 只在 ch1 建表，跑成了单副本还以为是三副本。
+- `wait_znodes` / `wait_mutation` 轮询 Keeper 子节点数、mutation 是否跑完，超时都会明着报出来。判断「去重窗口有没有把旧块顶出去」只能轮询，理由见实验 02。
+- `is_num` 是给上面两个轮询用的：`q` 在服务端报错时把报错正文当返回值吐出来，要当数字用的地方得先验一遍，否则轮询会闷头转到超时。
 
 ## 实验设计
 
@@ -97,7 +99,7 @@ docs/                   日常排查用的知识，索引在 docs/README.md
 
 生产上的链路是：Keeper 抖动让某几批 INSERT 卡过 30 秒，Kafka Connect 框架把内存里保留的同一批原样重投，服务端两次都提交，表里多出 234 行逐字节相同的数据。块级去重本该认出来，它没有。
 
-本地没法复现 Keeper 抖动，但那一层不是结论所在。把窗口从 1000 压到 2 个块，四次插入就能走完同一条路径：
+本地没法复现 Keeper 抖动，但那一层不是结论所在。把窗口从 1000 压到 2 个块，4 个不同的块就能把窗口顶掉（batch-A 加中间那 3 个），整条路径一共 7 条 INSERT，其中 3 条是原样重投：
 
 ```
 ① 经 ch1 写入 batch-A                      → 2 行
@@ -113,6 +115,8 @@ docs/                   日常排查用的知识，索引在 docs/README.md
 ## 跑完之后和文章对不上的地方
 
 按影响排。前三条建议改文章，后两条是补充。
+
+五条都是 lab 实测，括号里给了实验号。凡是机制上说得通、但这个 lab 没有真跑过的，按 [docs/README.md](docs/README.md#标注约定) 那套约定标成「待一手观察」，不要当成实测结论往文章里搬。
 
 ### A. `blocks/` 的裁剪是周期性的，不是插到第 window+1 个块就立刻顶掉
 
@@ -158,7 +162,9 @@ docs/                   日常排查用的知识，索引在 docs/README.md
 
 写实验 07 时踩到的，文章里没写错，是可以补的一条。
 
-先 `DROP TABLE t`（不加 SYNC）、发现撞车再补一条 `DROP TABLE IF EXISTS t SYNC` 是没用的：表已经不在 `system.tables` 里，第二条是空跑，而 Keeper 里那个副本要等 `database_atomic_delay_before_drop_table_sec`（默认 480 秒）才消失。补救靠 `SYSTEM DROP REPLICA`，正解是第一次就写 `SYNC`。
+先 `DROP TABLE t`（不加 SYNC）、发现撞车再补一条 `DROP TABLE IF EXISTS t SYNC` 是没用的：表已经不在 `system.tables` 里，第二条是空跑（lab 实测，实验 07），补救靠 `SYSTEM DROP REPLICA`，正解是第一次就写 `SYNC`。`database_atomic_delay_before_drop_table_sec` 默认 480 秒是从 `system.server_settings` 读到的，至于「等满 480 秒它自己会消失」，这个 lab 没真等过（待一手观察）。
+
+补救那条命令本身有个坑，也是实验 07 里量出来的：**副本名不做宏替换**。`SYSTEM DROP REPLICA '{replica}' FROM ZKPATH '…'` 既不报错也不生效，是个静默空跑，副本名必须写字面量（`SELECT getMacro('replica')` 能拿到）。
 
 ## 本地复现不了的
 

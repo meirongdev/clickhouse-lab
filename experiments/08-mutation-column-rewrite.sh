@@ -6,14 +6,24 @@
 #   另外：primary/partition key 上的列不支持更新；IN PARTITION 是安全装置。
 #
 # hardlink 用 stat 的链接数看（1 = 新写的文件，2 = 和旧 part 共用同一个 inode）。
+# 这是唯一一个必须跑在 docker 宿主机上的实验：要进容器 stat 文件。容器名取 CH1_CONTAINER
+# （默认 ch1），它必须和 CH1 指的是同一个节点，否则量的是另一台机器上的文件。
 set -uo pipefail
 source "$(dirname "$0")/../lib.sh"
 require_cluster
 provenance
 FAILED=0
 
-links() { docker exec ch1 stat -c '%h %n' "$1" 2>/dev/null | awk '{print $1}'; }
-part_path() { q1 "SELECT path FROM system.parts WHERE table='$1' AND active AND partition_id='$2' LIMIT 1" | tr -d '\n'; }
+if ! docker exec "$CH1_CONTAINER" true >/dev/null 2>&1; then
+  echo "进不去容器 '$CH1_CONTAINER'：这个实验要在容器里 stat 文件才能数 hardlink 链接数。" >&2
+  echo "在 docker 宿主机上跑，或者用 CH1_CONTAINER 指到 $CH1 对应的容器名。" >&2
+  exit 1
+fi
+
+links() { docker exec "$CH1_CONTAINER" stat -c '%h %n' "$1" 2>/dev/null | awk '{print $1}'; }
+part_path() { q1 "SELECT path FROM system.parts
+                  WHERE database = currentDatabase() AND table='$1' AND active
+                    AND partition_id='$2' LIMIT 1" | tr -d '\n'; }
 
 q1 "DROP TABLE IF EXISTS mut ON CLUSTER default SYNC" >/dev/null
 q1 "CREATE TABLE mut ON CLUSTER default (p UInt32, id UInt64, placed_at UInt64, settled_at UInt64, pad String)
@@ -25,13 +35,19 @@ q1 "INSERT INTO mut SELECT 1, number, 0, 1700000000 + number, repeat('x', 200) F
 q1 "INSERT INTO mut SELECT 2, number, 0, 1700000000 + number, 'y' FROM numbers(10)"
 q1 "SYSTEM SYNC REPLICA mut" >/dev/null
 q1 "SELECT partition_id, part_type, rows, formatReadableSize(bytes_on_disk) AS size
-    FROM system.parts WHERE table='mut' AND active ORDER BY partition_id FORMAT TSVWithNames"
-expect "p=1 的 part 格式" "$(q1 "SELECT part_type FROM system.parts WHERE table='mut' AND active AND partition_id='1'" | tr -d '\n')" "Wide"
-expect "p=2 的 part 格式" "$(q1 "SELECT part_type FROM system.parts WHERE table='mut' AND active AND partition_id='2'" | tr -d '\n')" "Compact"
+    FROM system.parts WHERE database = currentDatabase() AND table='mut' AND active
+    ORDER BY partition_id FORMAT TSVWithNames"
+part_type() { q1 "SELECT part_type FROM system.parts
+                  WHERE database = currentDatabase() AND table='mut' AND active
+                    AND partition_id='$1'" | tr -d '\n'; }
+expect "p=1 的 part 格式" "$(part_type 1)" "Wide"
+expect "p=2 的 part 格式" "$(part_type 2)" "Compact"
 
 section "mutation 要重写的量：那一列自己占多少（system.parts_columns）"
 q1 "SELECT partition_id, column, formatReadableSize(sum(column_bytes_on_disk)) AS col_size
-    FROM system.parts_columns WHERE table='mut' AND active AND column IN ('placed_at','pad')
+    FROM system.parts_columns
+    WHERE database = currentDatabase() AND table='mut' AND active
+      AND column IN ('placed_at','pad')
     GROUP BY partition_id, column ORDER BY partition_id, column FORMAT TSVWithNames"
 
 OLD=$(part_path mut 1)
@@ -39,10 +55,7 @@ note "改之前 p=1 的 part：$OLD"
 
 section "Wide part 上跑列级 mutation，带 IN PARTITION"
 q1 "ALTER TABLE mut UPDATE placed_at = settled_at IN PARTITION 1 WHERE placed_at = 0" >/dev/null
-for i in $(seq 1 30); do
-  done_n=$(q1 "SELECT countIf(is_done=0) FROM system.mutations WHERE table='mut'" | tr -d '\n')
-  [ "$done_n" = "0" ] && break; sleep 2
-done
+wait_mutation mut 60 || FAILED=1
 NEW=$(part_path mut 1)
 note "改之后 p=1 的 part：$NEW"
 expect "生成了新 part" "$([ "$OLD" != "$NEW" ] && echo yes || echo no)" "yes"
@@ -67,7 +80,8 @@ done
 section "验收要问遍三台（文章里 clusterAllReplicas 那条）"
 q1 "SELECT hostName() AS replica, mutation_id, is_done, parts_to_do
     FROM clusterAllReplicas('default', system.mutations)
-    WHERE table='mut' ORDER BY replica, mutation_id FORMAT TSVWithNames"
+    WHERE database = currentDatabase() AND table='mut'
+    ORDER BY replica, mutation_id FORMAT TSVWithNames"
 
 q1 "DROP TABLE IF EXISTS mut ON CLUSTER default SYNC" >/dev/null
 exit $FAILED

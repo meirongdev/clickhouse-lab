@@ -1,4 +1,4 @@
-# 跑于 2026-09-17 09:01:35 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab c4c1e9d
+# 跑于 2026-09-17 09:13:08 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 616aee6
 
 === 造两个分区：p=1 做成 Wide part，p=2 故意留成 Compact ===
 partition_id	part_type	rows	size
@@ -13,10 +13,11 @@ partition_id	column	col_size
 1	placed_at	232.00 B
 2	pad	0.00 B
 2	placed_at	0.00 B
-  · 改之前 p=1 的 part：/var/lib/clickhouse/store/1f3/1f31da73-1f1a-40a3-ad65-0ee5aca3cc53/1_0_0_0/
+  · 改之前 p=1 的 part：/var/lib/clickhouse/store/ab5/ab5d9c15-4abb-45c2-b7d7-c4a4ae4a7634/1_0_0_0/
 
 === Wide part 上跑列级 mutation，带 IN PARTITION ===
-  · 改之后 p=1 的 part：/var/lib/clickhouse/store/1f3/1f31da73-1f1a-40a3-ad65-0ee5aca3cc53/1_0_0_0_1/
+  mutation 在 2s 内跑完
+  · 改之后 p=1 的 part：/var/lib/clickhouse/store/ab5/ab5d9c15-4abb-45c2-b7d7-c4a4ae4a7634/1_0_0_0_1/
   [符合] 生成了新 part：yes
 
 === 新 part 里各列文件的 hardlink 链接数 ===

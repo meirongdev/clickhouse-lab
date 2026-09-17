@@ -64,6 +64,27 @@ ORDER BY name;
 | `database_atomic_delay_before_drop_table_sec` | 480 秒 | lab 实测（实验 07、13） | `DROP` 不加 `SYNC` 时的宽限期，实测计时准：t=451s 时 Keeper 副本与 `system.dropped_tables` 都在，t=481s 同时归零。这期间能 `UNDROP TABLE` 原样救回、也能 `SYSTEM DROP REPLICA` 清残留；期满两者一起失效，加了 `SYNC` 则当场失效 |
 | `insert_keeper_max_retries` | 20 | lab 实测（实验 12） | Keeper 不可用时 INSERT 不是立刻失败：默认参数下实测卡 **142 秒**才报 `TABLE_IS_READ_ONLY`，而 Connect 的 socket 超时是 30 秒——客户端早重投了，服务端还在重试。这就是重复行那条链的起点 |
 
+## 一条 INSERT 会切成几个 part
+
+排查 `Too many parts` 时，先得知道 part 是怎么来的。**一条 INSERT 不是只产一个 part**，它按块切：
+
+```
+part 数 = ceil(行数 / 1111953)          1111953 = 17 × max_block_size
+```
+
+为什么是 17 块（lab 实测，2026-09-17）：读取侧按 `max_block_size` = 65409 行吐一块，写入侧累加到 `min_insert_block_size_rows` = 1048449 才落一个 part，而 `1048449 / 65409 = 16.03`，所以要攒满 17 块才够。实测 part 里的行数正好是 1111953，最后一个装余数：
+
+| 一条 INSERT 的行数 | part 数 |
+|---|---|
+| 1,000,000 | 1 |
+| 5,000,000 | 5 |
+| 10,000,000 | 9 |
+
+两条要记住的：
+
+- **行数和字节数谁先到算谁。** 还有个 `min_insert_block_size_bytes` = 256 MiB。上面那个 6 列窄表未压缩约 36 字节/行，256 MiB 要 750 万行才到，所以行数先生效；换成生产那种宽表，可能是字节数先到，part 会更小更多。
+- **这只是出生时的数。** `system.parts` 看到的是「生成速度 − merge 消化速度」的结果。要稳定地堆 part 做实验，得先 `SYSTEM STOP MERGES` 把消化那一侧关掉（实验 11、14 都是这么做的）。
+
 ## 跨版本会变的默认值
 
 | 变更 | 锚点 |

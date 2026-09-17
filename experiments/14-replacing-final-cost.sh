@@ -17,9 +17,14 @@ require_cluster
 provenance
 FAILED=0
 
-ROWS=10000000      # 正常数据
-REPOSTS=5          # 重投次数
-REPOST_ROWS=100000 # 每次重投的行数
+# 规模可以用环境变量覆盖，默认 1000 万——够看清机制，又不会让 run-all 变慢。
+# 推到接近生产的量级见 docs/deployment-architecture.md 的「待建实验 15」：
+#   ROWS=500000000 bash experiments/14-replacing-final-cost.sh
+# 注意第五节那个手写去重在 5 亿行上会撞内存墙（本机 16 GiB，需要约 58 GiB），
+# 那不是实验失败，是那个量级上的结论，跑之前先读待建实验 15 那一节。
+ROWS=${ROWS:-10000000}              # 正常数据
+REPOSTS=${REPOSTS:-5}               # 重投次数
+REPOST_ROWS=${REPOST_ROWS:-100000}  # 每次重投的行数
 DAY_MS=1785369600000
 
 section "造数据：$ROWS 行 + $REPOSTS 次重投（每次 $REPOST_ROWS 行，逐字节相同）"

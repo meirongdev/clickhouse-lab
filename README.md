@@ -105,6 +105,8 @@ docs/                   日常排查用的知识，索引在 docs/README.md
 | 13 | 误删之后 `DETACH` / `FREEZE` / `UNDROP` 各能救回什么 | `daily-checklist.md` 恢复动作 | 三条都能救；`DROP … SYNC` 之后 `UNDROP` 报 `UNKNOWN_TABLE`，救不回 |
 | 14 | `ReplacingMergeTree` + `FINAL` 到底贵在哪 | `deployment-architecture.md` 第 1 条 | 重投能被折叠（1050 万物理行 → `FINAL` 读到 1000 万）；代价跟着重叠 part 数走（合成 1 个 part 后快五到七倍）；比手写去重便宜两个数量级 |
 
+还没做的实验也记在 `docs/` 里，按编号找：待建实验 09（坏批次进没进 DLQ，要 Kafka）、待建实验 15（单个日分区 5 亿行的 `FINAL` 代价，本机能做，可行性已经算过）。
+
 实验 12 那个 142 秒值得单拎出来：生产上 Connect 的 socket 超时是 30 秒，也就是**客户端在第 30 秒就超时重投了，而服务端这边还要再重试一百多秒**。文章二那条重复行的链路，起点就在这段错位上。
 
 ### 02 是主实验

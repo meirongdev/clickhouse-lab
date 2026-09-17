@@ -86,9 +86,42 @@ esac
 note "所以那条「临时表开头用 DROP … SYNC」（实验 07）是有代价的：它同时放弃了后悔药。"
 note "对随手建的临时表这是对的；对真表，先确认不需要 UNDROP 再加 SYNC。"
 
-section "还没验的"
-note "「等满 $(q1 "SELECT value FROM system.server_settings WHERE name='database_atomic_delay_before_drop_table_sec'" | tr -d '\n') 秒之后它自己消失」这条没等过（待一手观察）："
-note "这个实验只证明了延迟期内能救回来，没证明延迟期结束后就救不回来了。"
+section "五、延迟期满之后，后悔药也到期"
+DELAY=$(q1 "SELECT value FROM system.server_settings WHERE name='database_atomic_delay_before_drop_table_sec'" | tr -d '\n')
+note "实测过一次（2026-09-17，delay = ${DELAY} 秒）：DROP 之后 t=451s 时 Keeper 里的副本和"
+note "system.dropped_tables 都还在，t=481s 两者同时归零，之后 UNDROP 报 UNKNOWN_TABLE。"
+note "也就是说延迟期满那一刻，Keeper 残留和后悔药是同时消失的，不是两件事。"
+note "这一段默认跳过——等满 ${DELAY} 秒会给 run-all 多加 8 分钟。要自己再验一次："
+note "  SLOW=1 bash experiments/13-drop-recovery-window.sh"
+
+if [ "${SLOW:-0}" = "1" ]; then
+  ZK=/ch/tables/01/expiry_probe
+  REPL=$(q1 "SELECT getMacro('replica')" | tr -d '\n')
+  q1 "DROP TABLE IF EXISTS expiry_probe SYNC" >/dev/null 2>&1
+  q1 "SYSTEM DROP REPLICA '$REPL' FROM ZKPATH '$ZK'" >/dev/null 2>&1
+  q1 "CREATE TABLE expiry_probe (id UInt32)
+      ENGINE = ReplicatedMergeTree('$ZK','{replica}') ORDER BY id" >/dev/null
+  q1 "INSERT INTO expiry_probe VALUES (1),(2)"
+  q1 "DROP TABLE expiry_probe" >/dev/null   # 不加 SYNC，开始走延迟删除
+  S=$(date +%s); gone=""
+  while [ "$(( $(date +%s) - S ))" -lt 700 ]; do
+    t=$(( $(date +%s) - S ))
+    zn=$(q1 "SELECT count() FROM system.zookeeper WHERE path='$ZK/replicas'" 2>/dev/null | tr -d '\n')
+    is_num "$zn" || zn=0    # 路径整个没了也算 0
+    printf '  t=%-5s Keeper 里的副本数=%s\n' "${t}s" "$zn"
+    [ "$zn" = "0" ] && { gone=$t; break; }
+    sleep 30
+  done
+  note "副本在 t=${gone:-未消失}s 消失"
+  expect "副本撑过了延迟期的九成才消失（1 = 是）" \
+    "$([ -n "$gone" ] && [ "$gone" -ge "$((DELAY * 9 / 10))" ] && echo 1 || echo 0)" "1"
+  out=$(q1 "UNDROP TABLE expiry_probe" 2>&1)
+  case "$out" in
+    "") echo "  [不符] 延迟期满之后居然还能 UNDROP"; FAILED=1 ;;
+    *) printf '  [符合] 期满之后救不回来了：%s\n' "$(printf '%s' "$out" | head -1 | cut -c1-90)" ;;
+  esac
+  q1 "DROP TABLE IF EXISTS expiry_probe SYNC" >/dev/null 2>&1
+fi
 
 docker exec "$CH1_CONTAINER" rm -rf "/var/lib/clickhouse/shadow/$BK" 2>/dev/null || true
 q1 "DROP TABLE IF EXISTS recov ON CLUSTER default SYNC" >/dev/null 2>&1

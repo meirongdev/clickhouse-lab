@@ -61,7 +61,7 @@ ORDER BY name;
 | `insert_deduplication_token` | 批次挂在 partition 上就一定有；`partition == -1` 时返回 null | v1.3.9 `util/QueryIdentifier.java:56-60`（已核，不在 `sink/dlq/`） | 重投能被认出来的前提，也是实验 02 能模拟重投的理由 |
 | Kafka `offset.flush.interval.ms` | 60000 | 3.7.0 `WorkerConfig.java:104-107`（已核） | 重投要等下一个提交点，一轮失败的间隔落在 (30, 90] 秒 |
 | `errors.retry.timeout` | 默认 30000，可填 0-300000 | Confluent 托管 connector 页（已核） | 页面原话是 failed record inserts 的 retry budget，代码里 `retryWithToleranceOperator` 只包转换阶段（`WorkerSinkTask:533-541`）。两层说法对不上，遇到时以代码为准并在文里标注 |
-| `database_atomic_delay_before_drop_table_sec` | 480 秒 | lab 实测（实验 07、13） | `DROP` 不加 `SYNC` 时 Keeper 里的副本残留这么久，补救是 `SYSTEM DROP REPLICA`；这段时间里表本身能用 `UNDROP TABLE` 原样救回（实验 13），加了 `SYNC` 就救不回 |
+| `database_atomic_delay_before_drop_table_sec` | 480 秒 | lab 实测（实验 07、13） | `DROP` 不加 `SYNC` 时的宽限期，实测计时准：t=451s 时 Keeper 副本与 `system.dropped_tables` 都在，t=481s 同时归零。这期间能 `UNDROP TABLE` 原样救回、也能 `SYSTEM DROP REPLICA` 清残留；期满两者一起失效，加了 `SYNC` 则当场失效 |
 | `insert_keeper_max_retries` | 20 | lab 实测（实验 12） | Keeper 不可用时 INSERT 不是立刻失败：默认参数下实测卡 **142 秒**才报 `TABLE_IS_READ_ONLY`，而 Connect 的 socket 超时是 30 秒——客户端早重投了，服务端还在重试。这就是重复行那条链的起点 |
 
 ## 跨版本会变的默认值

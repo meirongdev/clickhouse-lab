@@ -173,7 +173,7 @@ docs/                   日常排查用的知识，索引在 docs/README.md
 
 写实验 07 时踩到的，文章里没写错，是可以补的一条。
 
-先 `DROP TABLE t`（不加 SYNC）、发现撞车再补一条 `DROP TABLE IF EXISTS t SYNC` 是没用的：表已经不在 `system.tables` 里，第二条是空跑（lab 实测，实验 07），补救靠 `SYSTEM DROP REPLICA`，正解是第一次就写 `SYNC`。`database_atomic_delay_before_drop_table_sec` 默认 480 秒是从 `system.server_settings` 读到的，至于「等满 480 秒它自己会消失」，这个 lab 没真等过（待一手观察）。
+先 `DROP TABLE t`（不加 SYNC）、发现撞车再补一条 `DROP TABLE IF EXISTS t SYNC` 是没用的：表已经不在 `system.tables` 里，第二条是空跑（lab 实测，实验 07），补救靠 `SYSTEM DROP REPLICA`，正解是第一次就写 `SYNC`。`database_atomic_delay_before_drop_table_sec` 默认 480 秒，而且真等过了（lab 实测，实验 13 的 `SLOW=1` 那一段）：t=451s 时那个副本还挂在 Keeper 里，t=481s 消失，同一时刻 `system.dropped_tables` 里的条目也没了、`UNDROP` 开始报 `UNKNOWN_TABLE`。撞车窗口和后悔药窗口是同一个计时器。
 
 补救那条命令本身有个坑，也是实验 07 里量出来的：**副本名不做宏替换**。`SYSTEM DROP REPLICA '{replica}' FROM ZKPATH '…'` 既不报错也不生效，是个静默空跑，副本名必须写字面量（`SELECT getMacro('replica')` 能拿到）。
 

@@ -68,8 +68,9 @@ LIMIT 20;
   | `DROP TABLE … SYNC` | 救不回来 | `UNDROP` 报 `UNKNOWN_TABLE`。SYNC 是立刻删，同时放弃后悔药 |
   | `FREEZE` | 手工搬回 `detached/` 再 `ATTACH` | `shadow/<名字>/store/<uuid>/<part>/`，冻的是 hardlink（链接数 2），瞬间完成、当时不额外占盘；`FREEZE` 本身不提供还原命令 |
 
+  **后悔药的有效期就是那 480 秒**，也是量过的（lab 实测，实验 13 的 `SLOW=1` 那一段）：`DROP` 之后 t=451s 时 Keeper 里的副本和 `system.dropped_tables` 都还在，t=481s 两者**同时**归零，之后 `UNDROP` 报 `UNKNOWN_TABLE`。所以「Keeper 里的副本残留」和「表还能救回来」不是两件事，是同一个计时器的两面——看到残留副本还在，就说明还来得及。
+
   两条推论：`DROP PARTITION` 不在上表里，它没有 `UNDROP` 那种后悔药，误删分区只能靠 `FREEZE` 的备份；「临时表开头用 `DROP … SYNC`」（实验 07）对随手建的临时表是对的，对真表要先确认不需要 `UNDROP`。
-  **仍然没验的**：等满 480 秒之后是不是真的就救不回来了（待一手观察）——实验 13 只证明了延迟期内能救。
 
 ## 要演练但现在没有的
 

@@ -69,7 +69,7 @@ results/                实跑输出，每份 log 第一行是出处
 docs/                   日常排查用的知识，索引在 docs/README.md
 ```
 
-日常排查数据问题时要用的机制地图、排查顺序和巡检清单在 [docs/README.md](docs/README.md)，那边记的是「手上要有什么」，这边记的是「跑过什么」。
+日常排查数据问题时要用的机制地图、排查顺序和巡检清单在 [docs/README.md](docs/README.md)，那边记的是「手上要有什么」，这边记的是「跑过什么」。这套 lab 自己的部署形状、它和生产的差别、以及生产上的选型判断，记在 [docs/deployment-architecture.md](docs/deployment-architecture.md)。
 
 `lib.sh` 里几个函数值得先看一眼：
 

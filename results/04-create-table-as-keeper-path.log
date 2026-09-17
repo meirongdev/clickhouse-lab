@@ -1,0 +1,19 @@
+
+=== 分支一：原表路径是字面量 ===
+  · 原表路径：/ch/tables/01/lit_src
+  CREATE TABLE lit_clone AS lit_src 的返回：
+    Code: 253. DB::Exception: Replica /ch/tables/01/lit_src/replicas/ch1 already exists. (REPLICA_ALREADY_EXISTS) (version 25.3.14.14 (official build))
+  [符合] 当场报错，没有悄悄共用复制元数据
+
+=== 分支二：原表路径里带 {uuid} ===
+  · {uuid} 宏只在 ON CLUSTER + Atomic 库下可用，这一段走 ON CLUSTER
+table	zookeeper_path
+uuid_clone	/ch/tables/8fcdb831-07c7-4cbe-9383-461d11016e6c/uuid_src
+uuid_src	/ch/tables/5d022251-ea5f-47c4-9f3c-12a493192f5b/uuid_src
+  [符合] 两张表的 zookeeper_path 各不相同：2
+
+=== 作业前该跑的那条检查 ===
+table	zookeeper_path
+lit_src	/ch/tables/01/lit_src
+uuid_clone	/ch/tables/8fcdb831-07c7-4cbe-9383-461d11016e6c/uuid_src
+uuid_src	/ch/tables/5d022251-ea5f-47c4-9f3c-12a493192f5b/uuid_src

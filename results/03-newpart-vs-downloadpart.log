@@ -1,0 +1,21 @@
+
+=== 开跑时间 2026-09-17 00:47:12（part_log 按这个时间过滤，躲开同名旧表的残留） ===
+
+=== 经 ch1 写入一个块 ===
+  · 这个块叫 all_0_0_0
+
+=== 同一个 part 在三个副本上各记了什么事件 ===
+  副本 event_type
+  ch1    NewPart
+  [符合] ch1（写入侧）：NewPart
+  ch2    DownloadPart
+  [符合] ch2（拉取侧）：DownloadPart
+  ch3    DownloadPart
+  [符合] ch3（拉取侧）：DownloadPart
+
+=== 按副本汇总 NewPart，这就是文章里那张表的口径 ===
+host	new_parts	downloaded
+ch1	1	0
+ch2	0	1
+ch3	0	1
+  [符合] 三副本 NewPart 合计（一个块只该数到一次）：1

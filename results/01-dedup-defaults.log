@@ -1,0 +1,22 @@
+
+=== 服务端版本 ===
+25.3.14.14
+
+=== 文章里那条查询的完整输出 ===
+name	value
+deduplicate_merge_projection_mode	throw
+non_replicated_deduplication_window	0
+replicated_deduplication_window	1000
+replicated_deduplication_window_for_async_inserts	10000
+replicated_deduplication_window_seconds	604800
+replicated_deduplication_window_seconds_for_async_inserts	604800
+
+=== 文章引用的两个值 ===
+  [符合] replicated_deduplication_window：1000
+  [符合] replicated_deduplication_window_seconds：604800
+
+=== 裁剪线程的周期（实验 02 要用） ===
+name	value
+cleanup_delay_period	30
+cleanup_delay_period_random_add	10
+max_cleanup_delay_period	300

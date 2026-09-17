@@ -1,0 +1,25 @@
+
+=== 库引擎和延迟删除的配置 ===
+name	engine
+default	Atomic
+name	value	description
+database_atomic_delay_before_drop_table_sec	480	\n    The delay during which a dropped table can be restored using the [`UNDROP`](/sql-reference/statements/undrop.md) statement. If `DROP TABLE` ran with a `SYNC` modifier, the setting is ignored.\n    The default for this setting is `480` (8 minutes).\n    
+
+=== 路径 A：DROP（不加 SYNC）之后立刻建同名同路径的表 ===
+  CREATE 的返回：Code: 253. DB::Exception: Replica /ch/tables/01/drop_plain/replicas/ch1 already exists. (REPLICA_ALREADY_EXISTS) (version 25.3.14.14 (official build))
+  [符合] 撞车，正是要 SYNC 的理由
+  · Keeper 里那个副本还挂着：ch1
+
+=== 路径 B：DROP … SYNC 之后立刻建同名同路径的表 ===
+  [符合] 建表成功，Keeper 里的副本已经清掉
+
+=== 为什么不是换成 CREATE TABLE IF NOT EXISTS ===
+  · 作业在 CREATE 和 REPLACE 之间挂掉，重跑时 IF NOT EXISTS 会复用上次写了一半的临时表
+  [符合] IF NOT EXISTS 之后表里还留着上一轮的行：2
+  · 两条 INSERT 再追加上去就错了，所以作业开头用 DROP … SYNC
+
+=== 写这个实验时踩到的：SYNC 救不了已经删过的表 ===
+  · 先 DROP（不加 SYNC）、再补一条 DROP IF EXISTS … SYNC 是没用的：表已经不在 system.tables 里，
+  · 第二条是空跑，而 Keeper 里那个副本要等 database_atomic_delay_before_drop_table_sec 才消失。
+  [符合] 补 SYNC 无效，仍然撞车
+  · 补救办法是 SYSTEM DROP REPLICA，或者等延迟期过去。作业里的正解是第一次就写 SYNC。

@@ -1,0 +1,44 @@
+
+=== 造两个分区：p=1 做成 Wide part，p=2 故意留成 Compact ===
+partition_id	part_type	rows	size
+1	Wide	200000	1.69 MiB
+2	Compact	10	744.00 B
+  [符合] p=1 的 part 格式：Wide
+  [符合] p=2 的 part 格式：Compact
+
+=== mutation 要重写的量：那一列自己占多少（system.parts_columns） ===
+partition_id	column	col_size
+1	pad	156.97 KiB
+1	placed_at	232.00 B
+2	pad	0.00 B
+2	placed_at	0.00 B
+  · 改之前 p=1 的 part：/var/lib/clickhouse/store/369/369ca54f-af8d-484f-96cd-c986714dd07c/1_0_0_0/
+
+=== Wide part 上跑列级 mutation，带 IN PARTITION ===
+  · 改之后 p=1 的 part：/var/lib/clickhouse/store/369/369ca54f-af8d-484f-96cd-c986714dd07c/1_0_0_0_1/
+  [符合] 生成了新 part：yes
+
+=== 新 part 里各列文件的 hardlink 链接数 ===
+  文件         链接数
+  pad.bin        2
+  settled_at.bin 2
+  id.bin         2
+  placed_at.bin  1
+  [符合] 未改的列 pad.bin（2 = 和旧 part 共用 inode）：2
+  [符合] 改掉的列 placed_at.bin（1 = 新写的）：1
+
+=== p=2 没写 IN PARTITION 就不会被碰 ===
+  [符合] p=2 里 placed_at 仍是 0 的行数：10
+  [符合] p=1 里 placed_at 仍是 0 的行数：0
+
+=== primary / partition key 上的列不支持更新 ===
+  ALTER TABLE mut UPDATE settled_at = settled_at + 1 …
+    Code: 420. DB::Exception: Cannot UPDATE key column `settled_at`. (CANNOT_UPDATE_COLUMN) (version 25.3.14.14 (official build))
+  ALTER TABLE mut UPDATE p = 3 …
+    Code: 420. DB::Exception: Cannot UPDATE key column `p`. (CANNOT_UPDATE_COLUMN) (version 25.3.14.14 (official build))
+
+=== 验收要问遍三台（文章里 clusterAllReplicas 那条） ===
+replica	mutation_id	is_done	parts_to_do
+ch1	0000000000	1	0
+ch2	0000000000	1	0
+ch3	0000000000	1	0

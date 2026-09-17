@@ -1,0 +1,32 @@
+services:
+  keeper:
+    image: clickhouse/clickhouse-keeper:25.3
+    container_name: ch-keeper
+    volumes: [./cfg/keeper.xml:/etc/clickhouse-keeper/keeper_config.xml:ro]
+  ch1: &node
+    image: clickhouse/clickhouse-server:25.3
+    container_name: ch1
+    hostname: ch1          # 不设的话 hostName() 返回容器 ID，clusterAllReplicas 的输出就认不出副本
+    depends_on: [keeper]
+    ulimits: {nofile: {soft: 262144, hard: 262144}}
+    environment: [CLICKHOUSE_SKIP_USER_SETUP=1]
+    volumes:
+      - ./cfg/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ./cfg/macros-ch1.xml:/etc/clickhouse-server/config.d/macros.xml:ro
+    ports: ["18123:8123"]
+  ch2:
+    <<: *node
+    container_name: ch2
+    hostname: ch2
+    volumes:
+      - ./cfg/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ./cfg/macros-ch2.xml:/etc/clickhouse-server/config.d/macros.xml:ro
+    ports: ["18124:8123"]
+  ch3:
+    <<: *node
+    container_name: ch3
+    hostname: ch3
+    volumes:
+      - ./cfg/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ./cfg/macros-ch3.xml:/etc/clickhouse-server/config.d/macros.xml:ro
+    ports: ["18125:8123"]

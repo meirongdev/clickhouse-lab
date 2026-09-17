@@ -90,14 +90,28 @@ t_rw=$(wait_flag 0 120) || FAILED=1
 note "副本自己退出 readonly 用了约 ${t_rw}s，没做任何人工干预"
 expect "is_readonly 回到 0" "$(readonly_flag)" "0"
 expect "写入恢复（空 = 成功）" "$(q1 "INSERT INTO keeper_outage VALUES (4)" 2>&1 | head -1)" ""
-# SYSTEM SYNC REPLICA 只让「你连的那个节点」追上队列，对另外两个副本不起作用。
-# Keeper 刚恢复，ch2/ch3 还在追，所以三个节点都要各自 sync 一次再比行数（同实验 03）。
-for n in "${NODES[@]}"; do q "$n" "SYSTEM SYNC REPLICA keeper_outage" >/dev/null; done
+# 两个坑叠在一起：SYSTEM SYNC REPLICA 只让「你连的那个节点」追上队列，对另外两个副本
+# 不起作用（同实验 03）；而且 Keeper 刚恢复时三副本对齐是最终一致的，直接比会抓到中间状态。
+# 所以三个节点各自 sync、并且轮询到一致为止，超时才算失败。
+replica_spread() {
+  q1 "SELECT uniqExact(c) FROM (
+        SELECT count() AS c FROM clusterAllReplicas('default', currentDatabase(), keeper_outage)
+        GROUP BY hostName())" | tr -d '\n'
+}
+wait_consistent() {
+  local timeout=$1 t=0 n u
+  while [ "$t" -lt "$timeout" ]; do
+    for n in "${NODES[@]}"; do q "$n" "SYSTEM SYNC REPLICA keeper_outage" >/dev/null 2>&1; done
+    u=$(replica_spread)
+    [ "$u" = "1" ] && { echo "$t"; return 0; }
+    sleep 2; t=$((t + 2))
+  done
+  echo "超时"; return 1
+}
+t_sync=$(wait_consistent 60) || FAILED=1
+note "三副本行数追平用了约 ${t_sync}s"
 expect "停摆期间被拒那条没有偷偷补写进来" "$(q1 "SELECT count() FROM keeper_outage")" "3"
-expect "三个副本都看到一样的行数" \
-  "$(q1 "SELECT uniqExact(c) FROM (
-         SELECT count() AS c FROM clusterAllReplicas('default', currentDatabase(), keeper_outage)
-         GROUP BY hostName())")" "1"
+expect "三个副本都看到一样的行数" "$(replica_spread)" "1"
 
 section "结论"
 note "单节点 Keeper 停摆期间：读可用、写不可用、副本自动 readonly；Keeper 回来之后自愈。"

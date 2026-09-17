@@ -64,7 +64,7 @@ run-all.sh              跑全部实验并存 results/
 lib.sh                  共用函数：q / on_all / rr / expect / wait_znodes
 docker-compose.yml
 cfg/                    keeper、cluster、三个节点的 macros
-experiments/            12 个实验脚本，每个开头写了它验的是哪条断言
+experiments/            13 个实验脚本，每个开头写了它验的是哪条断言
 results/                实跑输出，每份 log 第一行是出处
 docs/                   日常排查用的知识，索引在 docs/README.md
 ```
@@ -103,6 +103,7 @@ docs/                   日常排查用的知识，索引在 docs/README.md
 | 11 | `parts_to_delay_insert` / `parts_to_throw_insert` 的先后顺序 | `mechanism-map.md`、演练条目 4 | 阈值压到 20 / 25：被拒时正好 25 个 part，报 `TOO_MANY_PARTS`；之前已拖慢 5 次，耗时 10 ms → 316 ms |
 | 12 | 单节点 Keeper 停摆，集群退化成什么样 | `deployment-architecture.md` 第 2 条 | 副本立刻转 readonly、读照常、写被拒；**默认参数下 INSERT 卡 142 秒**才报错；Keeper 回来约 4 秒自愈 |
 | 13 | 误删之后 `DETACH` / `FREEZE` / `UNDROP` 各能救回什么 | `daily-checklist.md` 恢复动作 | 三条都能救；`DROP … SYNC` 之后 `UNDROP` 报 `UNKNOWN_TABLE`，救不回 |
+| 14 | `ReplacingMergeTree` + `FINAL` 到底贵在哪 | `deployment-architecture.md` 第 1 条 | 重投能被折叠（1050 万物理行 → `FINAL` 读到 1000 万）；代价跟着重叠 part 数走（合成 1 个 part 后快五到七倍）；比手写去重便宜两个数量级 |
 
 实验 12 那个 142 秒值得单拎出来：生产上 Connect 的 socket 超时是 30 秒，也就是**客户端在第 30 秒就超时重投了，而服务端这边还要再重试一百多秒**。文章二那条重复行的链路，起点就在这段错位上。
 

@@ -1,4 +1,4 @@
-# 跑于 2026-09-17 09:57:29 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 03b9e0f
+# 跑于 2026-09-17 21:07:31 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 2832552
 
 === 造数据：10000 行正常数据 + 5 组逐字节相同的重复 ===
   · 多余行占比做成 5/10005，对着生产那次的形状（两亿行里多 234 行）

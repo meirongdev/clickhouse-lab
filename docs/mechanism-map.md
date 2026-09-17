@@ -8,7 +8,7 @@
 | 行数比上游少 | 接入链路：失败批次、DLQ、lag、offset 断点 | connector 指标、DLQ topic 有没有量、`query_log.written_rows` | 待建实验 09 |
 | 行数对得上但值不对 | 时间与分区语义、JOIN 放大、聚合口径 | 分区按哪个时区截断、右表键是否唯一 | 实验 10 |
 | 插入变慢或 `Too many parts` | part 生产速率与 merge 消化速度 | 单分区 active part 数、`DelayedInserts` 计数 | 实验 11 |
-| 查询变慢 | 裁剪没吃到、merge 抢资源、`FINAL` | `query_log` 的 `read_rows` 与 `result_rows` 之比 | 部分 |
+| 查询变慢 | 裁剪没吃到、merge 抢资源、`FINAL` | `query_log` 的 `read_rows` 与 `result_rows` 之比 | 实验 14 覆盖 `FINAL` 那一路 |
 | 三个副本数出来不一样 | 复制滞后 | `system.replicas` 的 `queue_size`、`absolute_delay` | 实验 03 覆盖一半 |
 | 删数据删不动 | mutation 队列与磁盘余量 | `system.mutations` 的 `is_done`、`latest_fail_msg` | 实验 08 的边缘 |
 | 建表或删表撞车 | Atomic 延迟删除加 Keeper 残留 | `system.replicas` 里旧 replica 是否还在 | 实验 07 |

@@ -1,4 +1,4 @@
-# 跑于 2026-09-17 09:56:50 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 03b9e0f
+# 跑于 2026-09-17 21:06:46 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 2832552
 
 === 建表：三个副本各建一次，窗口压到 2 个块 ===
   [符合] 活跃副本数：3
@@ -25,7 +25,8 @@
   t=20s  znode=4
   t=25s  znode=4
   t=30s  znode=4
-  t=35s  znode=2
+  t=35s  znode=4
+  t=40s  znode=2
 
 === ⑥ 裁剪之后再原样重投同一批，经 ch3 ===
   [符合] 行数（第二份落地）：7

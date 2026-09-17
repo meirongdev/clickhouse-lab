@@ -1,4 +1,4 @@
-# 跑于 2026-09-17 09:58:32 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 03b9e0f
+# 跑于 2026-09-17 21:07:46 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 2832552
 
 === 准备：一张普通的复制表，Keeper 还在的时候写得进去 ===
   [符合] 停 Keeper 之前的行数：2
@@ -21,16 +21,17 @@ insert_keeper_retry_max_backoff_ms	10000
   · 按默认的 20 次退避重试单独量过一次：INSERT 卡了 142 秒才返回 TABLE_IS_READ_ONLY
   · （lab 实测 2026-09-17，同一套停摆场景）。对照生产——Connect 的 socket 超时是 30 秒，
   · 也就是说客户端在第 30 秒就超时重投了，而服务端这边还要再重试一百多秒。
-  INSERT 卡了约 1s 才返回，报错原文：
+  INSERT 卡了约 0s 才返回，报错原文：
     Code: 242. DB::Exception: Table is in readonly mode: replica_path=/ch/tables/01/keeper_outage/replicas/ch1. (TABLE_IS_READ_ONLY) (version 25.3.14.14 (
   [符合] 报的是 TABLE_IS_READ_ONLY
   · 关键不是「写失败了」，是「失败之前先卡了一段」：卡住期间客户端超时重投，
   · 服务端这边两次提交都可能落地，于是有了实验 02 那条链路。
 
 === 把 Keeper 拉回来 ===
-  · 副本自己退出 readonly 用了约 2s，没做任何人工干预
+  · 副本自己退出 readonly 用了约 4s，没做任何人工干预
   [符合] is_readonly 回到 0：0
   [符合] 写入恢复（空 = 成功）：
+  · 三副本行数追平用了约 0s
   [符合] 停摆期间被拒那条没有偷偷补写进来：3
   [符合] 三个副本都看到一样的行数：1
 

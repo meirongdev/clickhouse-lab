@@ -1,0 +1,40 @@
+# 跑于 2026-09-17 09:44:18 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab c56afe2
+
+=== 准备：一张普通的复制表，Keeper 还在的时候写得进去 ===
+  [符合] 停 Keeper 之前的行数：2
+  [符合] 停 Keeper 之前 is_readonly：0
+
+=== 停掉 Keeper ===
+  · 容器已停：exited
+  · 副本变成 readonly 用了约 0s（轮询粒度 2 秒）
+  [符合] 副本已经是 readonly：1
+
+=== 停摆期间：读照常，写被拒 ===
+  [符合] SELECT 仍然读得到本地数据：2
+  · 读不碰 Keeper，所以读是好的——这也是为什么只看查询成功率发现不了 Keeper 挂了
+  · 默认重试参数（决定 INSERT 在报错之前会卡多久）：
+name	value
+insert_keeper_max_retries	20
+insert_keeper_retry_initial_backoff_ms	100
+insert_keeper_retry_max_backoff_ms	10000
+  · 下面这条把 insert_keeper_max_retries 压到 3，免得每次跑实验都卡两分多钟。
+  · 按默认的 20 次退避重试单独量过一次：INSERT 卡了 142 秒才返回 TABLE_IS_READ_ONLY
+  · （lab 实测 2026-09-17，同一套停摆场景）。对照生产——Connect 的 socket 超时是 30 秒，
+  · 也就是说客户端在第 30 秒就超时重投了，而服务端这边还要再重试一百多秒。
+  INSERT 卡了约 1s 才返回，报错原文：
+    Code: 242. DB::Exception: Table is in readonly mode: replica_path=/ch/tables/01/keeper_outage/replicas/ch1. (TABLE_IS_READ_ONLY) (version 25.3.14.14 (
+  [符合] 报的是 TABLE_IS_READ_ONLY
+  · 关键不是「写失败了」，是「失败之前先卡了一段」：卡住期间客户端超时重投，
+  · 服务端这边两次提交都可能落地，于是有了实验 02 那条链路。
+
+=== 把 Keeper 拉回来 ===
+  · 副本自己退出 readonly 用了约 2s，没做任何人工干预
+  [符合] is_readonly 回到 0：0
+  [符合] 写入恢复（空 = 成功）：
+  [符合] 停摆期间被拒那条没有偷偷补写进来：3
+  [符合] 三个副本都看到一样的行数：1
+
+=== 结论 ===
+  · 单节点 Keeper 停摆期间：读可用、写不可用、副本自动 readonly；Keeper 回来之后自愈。
+  · 所以它不是「数据会坏」的风险，是「写入全停 + 客户端开始重投」的风险。
+  · 生产上要 3 节点的理由就在这里：少一台还能写，而不是整个集群转成只读。

@@ -9,6 +9,8 @@ NODES=("$CH1" "$CH2" "$CH3")
 NODE_NAMES=(ch1 ch2 ch3)
 # 实验 08 要进容器数 hardlink 链接数，是唯一一处绕过 HTTP 直接摸文件的地方。
 CH1_CONTAINER=${CH1_CONTAINER:-ch1}
+# 实验 12 要停掉 Keeper 看集群怎么退化，用得上容器名。
+KEEPER_CONTAINER=${KEEPER_CONTAINER:-ch-keeper}
 
 # q <节点URL> <SQL>  在指定节点上执行，原样打印服务端返回。
 # 约定：服务端报错（HTTP 500）时报错正文照样从 stdout 出来，curl 退出码仍是 0。

@@ -6,12 +6,14 @@
 |---|---|---|---|
 | 行数比上游多 | 写入幂等，块级去重窗口 | 重复组的写入时间间隔、Keeper `blocks/` 的 znode 数 | 实验 02 |
 | 行数比上游少 | 接入链路：失败批次、DLQ、lag、offset 断点 | connector 指标、DLQ topic 有没有量、`query_log.written_rows` | 待建实验 09 |
-| 行数对得上但值不对 | 时间与分区语义、JOIN 放大、聚合口径 | 分区按哪个时区截断、右表键是否唯一 | 待建实验 10 |
-| 插入变慢或 `Too many parts` | part 生产速率与 merge 消化速度 | 单分区 active part 数、`delayed_inserts` / `rejected_inserts` | 待建实验 11 |
+| 行数对得上但值不对 | 时间与分区语义、JOIN 放大、聚合口径 | 分区按哪个时区截断、右表键是否唯一 | 实验 10 |
+| 插入变慢或 `Too many parts` | part 生产速率与 merge 消化速度 | 单分区 active part 数、`DelayedInserts` 计数 | 实验 11 |
 | 查询变慢 | 裁剪没吃到、merge 抢资源、`FINAL` | `query_log` 的 `read_rows` 与 `result_rows` 之比 | 部分 |
 | 三个副本数出来不一样 | 复制滞后 | `system.replicas` 的 `queue_size`、`absolute_delay` | 实验 03 覆盖一半 |
 | 删数据删不动 | mutation 队列与磁盘余量 | `system.mutations` 的 `is_done`、`latest_fail_msg` | 实验 08 的边缘 |
 | 建表或删表撞车 | Atomic 延迟删除加 Keeper 残留 | `system.replicas` 里旧 replica 是否还在 | 实验 07 |
+| 误删表或分区，要找后悔药 | Atomic 延迟删除、detached、shadow | `system.dropped_tables`、`system.detached_parts` | 实验 13 |
+| 写全停、副本转只读 | Keeper 不可用 | `system.replicas.is_readonly`、Keeper 在途请求 | 实验 12 |
 | 换分区之后数据少了一截 | 快照窗口 | runbook 开头与 REPLACE 之前各数一次分区行数 | 实验 06 |
 
 ## 默认值与出处
@@ -36,8 +38,8 @@ ORDER BY name;
 | `index_granularity` | 8192 行/mark | :54 | 主键是稀疏索引，一个 mark 之内照样扫 |
 | `max_bytes_to_merge_at_max_space_in_pool` | 150 GiB | :80 | 一轮 merge 的总量上限，决定 backlog 消化速度 |
 | `max_parts_to_merge_at_once` | 100 | :98 | 一次最多合多少个 part |
-| `parts_to_delay_insert` | 1000 | :126 | 单分区 active part 到这个数开始人为拖慢插入 |
-| `parts_to_throw_insert` | 3000 | :128 | 到这个数抛 `Too many parts` |
+| `parts_to_delay_insert` | 1000 | :126 | 单分区 active part 到这个数开始人为拖慢插入（实验 11 压到 20 验过） |
+| `parts_to_throw_insert` | 3000 | :128 | 到这个数抛 `Too many parts`（实验 11 压到 25 验过，报错时正好 25 个 part） |
 | `number_of_mutations_to_delay` | 500 | :111 | 未完成 mutation 到这个数开始拖慢 |
 | `number_of_mutations_to_throw` | 1000 | :112 | 再往上报 `Too many mutations` |
 | `replicated_deduplication_window` | 1000 个块 | :148 | 去重窗口的主约束 |
@@ -59,7 +61,8 @@ ORDER BY name;
 | `insert_deduplication_token` | 批次挂在 partition 上就一定有；`partition == -1` 时返回 null | v1.3.9 `util/QueryIdentifier.java:56-60`（已核，不在 `sink/dlq/`） | 重投能被认出来的前提，也是实验 02 能模拟重投的理由 |
 | Kafka `offset.flush.interval.ms` | 60000 | 3.7.0 `WorkerConfig.java:104-107`（已核） | 重投要等下一个提交点，一轮失败的间隔落在 (30, 90] 秒 |
 | `errors.retry.timeout` | 默认 30000，可填 0-300000 | Confluent 托管 connector 页（已核） | 页面原话是 failed record inserts 的 retry budget，代码里 `retryWithToleranceOperator` 只包转换阶段（`WorkerSinkTask:533-541`）。两层说法对不上，遇到时以代码为准并在文里标注 |
-| `database_atomic_delay_before_drop_table_sec` | 480 秒 | lab 实测（实验 07） | `DROP` 不加 `SYNC` 时 Keeper 里的副本残留这么久，补救是 `SYSTEM DROP REPLICA` |
+| `database_atomic_delay_before_drop_table_sec` | 480 秒 | lab 实测（实验 07、13） | `DROP` 不加 `SYNC` 时 Keeper 里的副本残留这么久，补救是 `SYSTEM DROP REPLICA`；这段时间里表本身能用 `UNDROP TABLE` 原样救回（实验 13），加了 `SYNC` 就救不回 |
+| `insert_keeper_max_retries` | 20 | lab 实测（实验 12） | Keeper 不可用时 INSERT 不是立刻失败：默认参数下实测卡 **142 秒**才报 `TABLE_IS_READ_ONLY`，而 Connect 的 socket 超时是 30 秒——客户端早重投了，服务端还在重试。这就是重复行那条链的起点 |
 
 ## 跨版本会变的默认值
 

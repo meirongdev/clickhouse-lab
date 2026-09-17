@@ -1,4 +1,4 @@
-# 跑于 2026-09-17 09:13:07 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 616aee6
+# 跑于 2026-09-17 09:44:07 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab c56afe2
 
 === 库引擎和延迟删除的配置 ===
 name	engine
@@ -6,7 +6,6 @@ default	Atomic
 name	value	description
 database_atomic_delay_before_drop_table_sec	480	\n    The delay during which a dropped table can be restored using the [`UNDROP`](/sql-reference/statements/undrop.md) statement. If `DROP TABLE` ran with a `SYNC` modifier, the setting is ignored.\n    The default for this setting is `480` (8 minutes).\n    
   · 本节点的 replica 宏是 ch1
-  · 清掉上一轮残留在 Keeper 里的副本：drop_plain
 
 === 路径 A：DROP（不加 SYNC）之后立刻建同名同路径的表 ===
   CREATE 的返回：Code: 253. DB::Exception: Replica /ch/tables/01/drop_plain/replicas/ch1 already exists. (REPLICA_ALREADY_EXISTS) (version 25.3.14.14 (official build))

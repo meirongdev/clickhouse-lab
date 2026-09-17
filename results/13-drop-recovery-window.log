@@ -1,0 +1,49 @@
+# 跑于 2026-09-17 09:44:32 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab c56afe2
+name	value
+database_atomic_delay_before_drop_table_sec	480
+name	engine
+default	Atomic
+
+=== 一、DETACH / ATTACH PARTITION 能找回什么 ===
+  [符合] 起始行数：3
+  [符合] DETACH 之后表里只剩另一个分区：1
+  · 数据没被删，只是摘下来了，在 system.detached_parts 里看得到：
+partition_id	reason
+20260730	
+  [符合] detached part 数：1
+  [符合] ATTACH 之后行数原样回来：3
+  · 结论：DETACH 是可逆的，原地可救，不用碰备份。DROP PARTITION 不是。
+
+=== 二、FREEZE 之后 shadow/ 里躺着什么 ===
+  · shadow/lab_recovery_probe 下的目录结构（只列到 part 一层）：
+    /var/lib/clickhouse/shadow/lab_recovery_probe/store/596/596affb3-d36b-4dd6-8f1d-9a1a40d5358f
+    /var/lib/clickhouse/shadow/lab_recovery_probe/store/596/596affb3-d36b-4dd6-8f1d-9a1a40d5358f/20260730_2_2_0
+    /var/lib/clickhouse/shadow/lab_recovery_probe/store/596/596affb3-d36b-4dd6-8f1d-9a1a40d5358f/20260730_2_2_0/primary.cidx
+    /var/lib/clickhouse/shadow/lab_recovery_probe/store/596/596affb3-d36b-4dd6-8f1d-9a1a40d5358f/20260730_2_2_0/data.bin
+    /var/lib/clickhouse/shadow/lab_recovery_probe/store/596/596affb3-d36b-4dd6-8f1d-9a1a40d5358f/20260730_2_2_0/data.cmrk3
+    /var/lib/clickhouse/shadow/lab_recovery_probe/store/596/596affb3-d36b-4dd6-8f1d-9a1a40d5358f/20260730_2_2_0/partition.dat
+  [符合] shadow/ 里冻住的 part 数（表里有 2 个分区）：2
+  · 冻的是 hardlink 不是拷贝，所以瞬间完成、当时不占额外空间；
+  · 但它和原 part 共用 inode，原 part 被 merge 掉之后这份才真正占住磁盘。
+  · 链接数验证：2 （>1 = 和原 part 共用 inode）
+  · 要恢复得自己把目录搬进 detached/ 再 ATTACH，FREEZE 本身不提供还原命令。
+
+=== 三、DROP 之后那 480 秒里能不能救回来（Atomic 的延迟删除） ===
+  [符合] DROP 之后 system.tables 里没有了：0
+  · 但它还在延迟删除队列里，system.dropped_tables 看得到：
+table	engine
+recov	ReplicatedMergeTree
+  [符合] UNDROP 成功
+  [符合] 救回来的行数和删之前一样：3
+  · 结论：不加 SYNC 的 DROP 在延迟期内可以 UNDROP 救回，数据完整。
+
+=== 四、加了 SYNC 就真没了 ===
+  DROP … SYNC 之后再 UNDROP：
+    Code: 60. DB::Exception: Table default.recov is being dropped, has been dropped, or the database engine does not support UNDROP. (UNKNOWN_TA
+  [符合] 救不回来了，SYNC 是立刻删
+  · 所以那条「临时表开头用 DROP … SYNC」（实验 07）是有代价的：它同时放弃了后悔药。
+  · 对随手建的临时表这是对的；对真表，先确认不需要 UNDROP 再加 SYNC。
+
+=== 还没验的 ===
+  · 「等满 480 秒之后它自己消失」这条没等过（待一手观察）：
+  · 这个实验只证明了延迟期内能救回来，没证明延迟期结束后就救不回来了。

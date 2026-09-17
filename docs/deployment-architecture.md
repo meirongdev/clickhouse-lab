@@ -45,7 +45,17 @@ zk_followers        0
 zk_synced_followers 0
 ```
 
-`standalone` 加 0 个 follower，就是字面意思上的单点：**挂了整个集群的复制和 DDL 都停**。lab 里这是刻意的，生产上不行，见第二节第 2 条。
+`standalone` 加 0 个 follower，就是字面意思上的单点。至于「挂了会怎样」，实验 12 真停了一次量出来的（lab 实测）：
+
+| 观测项 | 结果 |
+|---|---|
+| 副本转 `is_readonly` | 立刻（首次轮询 t=0s 就已经是 1） |
+| 停摆期间 `SELECT` | 照常返回，读不碰 Keeper |
+| 停摆期间 `INSERT` | 被拒，`Code: 242 TABLE_IS_READ_ONLY` |
+| `INSERT` 报错之前先卡多久 | 默认 `insert_keeper_max_retries=20` 下实测 **142 秒** |
+| Keeper 恢复之后 | 约 4 秒自己退出 readonly，无需人工干预，被拒那条不会补写 |
+
+所以单点 Keeper 的风险不是「数据会坏」，是**写入全停、并且客户端在漫长的卡顿里开始重投**。lab 里这是刻意的，生产上不行，见第二节第 2 条。
 
 换一套集群想自查同样几件事：
 
@@ -82,11 +92,13 @@ docker exec ch1 bash -c 'exec 3<>/dev/tcp/keeper/9181 && printf mntr >&3 && time
 
 ### 1. 别把块级去重当正确性机制 —— 适用：两者
 
-这是看完 `docs/` 和实验 02 之后最强的一条。那次 234 行重复的链是：Keeper 抖动 → INSERT 超时 → Connect 原样重投 → 去重窗口已被顶掉 → 第二份落地（生产事实）。实验 02 证明了这个窗口是**时间和数量都有界的尽力而为**，不是幂等保证（lab 实测）。继续在这条链上调参（放大窗口、拉长超时）只是把事故概率往后推。
+这是看完 `docs/` 和实验 02 之后最强的一条。那次 234 行重复的链是：Keeper 抖动 → INSERT 超时 → Connect 原样重投 → 去重窗口已被顶掉 → 第二份落地（生产事实）。实验 02 证明了这个窗口是**时间和数量都有界的尽力而为**，不是幂等保证（lab 实测）。
+
+实验 12 又给这条链补了起点：Keeper 不可用时 INSERT 不会快速失败，默认参数下实测卡 **142 秒**才报错，而 Connect 的 socket 超时是 30 秒（已核）。也就是说客户端在第 30 秒就放弃并重投了，服务端这边同一批还在重试——**重投不是异常路径，是这套默认值下的必然结果**。继续在这条链上调参（放大窗口、拉长超时）只是把事故概率往后推。
 
 结构性的解法，按代价从低到高：
 
-- **下游对账常态化。** `count() - uniqExact(key)` 已经是现成口径（`data-problems.md`），把它做成定时任务而不是事后排查手段。这条今天就能做。
+- **下游对账常态化。** `count() - uniqExact(key)` 已经是现成口径（`data-problems.md`），把它做成定时任务而不是事后排查手段。这条今天就能做。注意口径里必须是 `uniqExact`：`uniq` 在 1000 万基数上实测偏 −0.16%，而且误差两个方向都有（lab 实测，实验 10）。
 - **`clickhouse-kafka-connect` 打开 `exactlyOnce`。** 它默认 `false`（已核，`ClickHouseSinkConfig.java:78`）。打开之后重投还能不能被识别、代价多大，**没验过（待一手观察）**。
 - **`ReplacingMergeTree` + 版本列**，查询侧带 `FINAL` 或用物化视图收敛。重投只是多一份待合并的行，不会变成对账差异。代价是 `FINAL` 的查询开销（`data-problems.md` 里已经写了别拿它当默认读法），**对你们这张表值不值得没测过（待一手观察）**。
 
@@ -96,7 +108,7 @@ docker exec ch1 bash -c 'exec 3<>/dev/tcp/keeper/9181 && printf mntr >&3 && time
 
 lab 里 standalone 无所谓，生产不行：既是单点，又没有 quorum。而且那次事故的前兆恰恰在 Keeper 层（在途请求从常态 5~15 涨到几千，生产事实）。
 
-- 3 节点容 1 台、5 节点容 2 台；不要偶数，只增加投票成本不增加容错（raft 常识，**具体到 ClickHouse Keeper 的推荐部署待核官方页**）。
+- 3 节点容 1 台、5 节点容 2 台；不要偶数，只增加投票成本不增加容错（raft 常识，**具体到 ClickHouse Keeper 的推荐部署待核官方页**）。要说服人的话，实验 12 的那张表比任何论证都直接：单点一停，整个集群的写在 142 秒的卡顿之后全部转只读。
 - Keeper 的瓶颈一般在 fsync 延迟，建议给独立盘、别和 CH 数据盘抢 IO（**待核**）。小集群可以用 `clickhouse-server` 内嵌 `<keeper_server>`，规模上来之后拆开（**待核**）。
 - `zoo_keeper_request` 在途请求纳入基线告警 —— 这条 `daily-checklist.md` 里已经有了。
 
@@ -137,7 +149,7 @@ lab 里一个都没有：RBAC 与 TLS、profile 兜底（`max_memory_usage`、`m
 按「验一次能消掉多少争论」排。前两条本地就能做。
 
 1. **`exactlyOnce` 打开之后到底发生什么**（待一手观察）。要 Kafka + Connect + 一个能卡住连接的代理，工程量比现在这套大一档，根 README 里已经列为本地复现不了的一项。
-2. **`ReplacingMergeTree` + `FINAL` 在这个数据量下的查询代价**（待一手观察）。本地能测，造两亿行是唯一的门槛。
-3. **ClickHouse Keeper 的推荐部署形状**（待核）：节点数、盘、内嵌还是独立，以官方页为准，别照搬 ZooKeeper 的经验。
+2. **`ReplacingMergeTree` + `FINAL` 在这个数据量下的查询代价**（待一手观察）。本地能测，造两亿行是唯一的门槛。这是这份文档里最该补的一条——第 1 条建议的落地方式就压在它上面。
+3. **ClickHouse Keeper 的推荐部署形状**（待核）：节点数、盘、内嵌还是独立，以官方页为准，别照搬 ZooKeeper 的经验。实验 12 验的是「单点挂了会怎样」，不是「几个节点才够」，这两件事别混。
 4. **ClickHouse Cloud 和 Altinity operator 的实际能力**（待核）：上表里那两行是道听途说，做选型决策之前必须自己核。
-5. **备份恢复演练**（待一手观察）：`daily-checklist.md` 里列的第 1 条演练。在做过一次之前，任何文档都不要写「可以恢复」。
+5. ~~**备份恢复演练**~~ → 部分做掉了：实验 13 验了 `DETACH`/`ATTACH`、`UNDROP`、`FREEZE` 后 `shadow/` 里躺着什么，结果记在 `daily-checklist.md` 的「恢复动作」那张表里。**还缺**完整的「从 `FREEZE` 备份还原一张表并计时」，以及副本重建（杀掉一个副本、清空数据目录、看它 fetch 回来要多久）。

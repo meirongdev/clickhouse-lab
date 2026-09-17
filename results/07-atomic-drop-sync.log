@@ -1,4 +1,4 @@
-# 跑于 2026-09-17 08:51:48 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab a371a5e
+# 跑于 2026-09-17 09:01:34 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab c4c1e9d
 
 === 库引擎和延迟删除的配置 ===
 name	engine
@@ -15,12 +15,12 @@ database_atomic_delay_before_drop_table_sec	480	\n    The delay during which a d
   [符合] 建表成功，Keeper 里的副本已经清掉
 
 === 为什么不是换成 CREATE TABLE IF NOT EXISTS ===
-  · 作业在 CREATE 和 REPLACE 之间挂掉，重跑时 IF NOT EXISTS 会复用上次写了一半的临时表
+  · runbook 在 CREATE 和 REPLACE 之间挂掉，重跑时 IF NOT EXISTS 会复用上次写了一半的临时表
   [符合] IF NOT EXISTS 之后表里还留着上一轮的行：2
-  · 两条 INSERT 再追加上去就错了，所以作业开头用 DROP … SYNC
+  · 两条 INSERT 再追加上去就错了，所以 runbook 开头用 DROP … SYNC
 
 === 写这个实验时踩到的：SYNC 救不了已经删过的表 ===
   · 先 DROP（不加 SYNC）、再补一条 DROP IF EXISTS … SYNC 是没用的：表已经不在 system.tables 里，
   · 第二条是空跑，而 Keeper 里那个副本要等 database_atomic_delay_before_drop_table_sec 才消失。
   [符合] 补 SYNC 无效，仍然撞车
-  · 补救办法是 SYSTEM DROP REPLICA，或者等延迟期过去。作业里的正解是第一次就写 SYNC。
+  · 补救办法是 SYSTEM DROP REPLICA，或者等延迟期过去。runbook 里的正解是第一次就写 SYNC。

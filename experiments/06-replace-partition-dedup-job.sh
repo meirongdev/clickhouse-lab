@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 断言（《用 REPLACE PARTITION 删掉重复行》整篇）：
-#   临时表加 REPLACE PARTITION 能把一个日分区里的重复行清掉，作业可重跑、幂等，
+# 断言（《清理 ClickHouse 重复行的 REPLACE PARTITION runbook》整篇）：
+#   临时表加 REPLACE PARTITION 能把一个日分区里的重复行清掉，runbook 可重跑、幂等，
 #   两条 INSERT 拆开是为了让 LIMIT 1 BY 只作用在重复键上。
 #   跑之前要验：每组重复的业务列哈希数是 1（否则 LIMIT 1 BY 会不报错地丢掉好的那份）。
 #
@@ -15,7 +15,7 @@ PID=20260730
 DAY_MS=1785369600000   # 2026-07-30T00:00:00Z
 ROWS=10000             # 正常数据行数
 DUPS=5                 # 重复的键组数，每组 2 行
-RATIO_LIMIT=0.1        # 多余行占比的上限，百分比。超过这条线就不是零星写重，作业该中止另查原因
+RATIO_LIMIT=0.1        # 多余行占比的上限，百分比。超过这条线就不是零星写重，runbook 该中止另查原因
 
 section "造数据：$ROWS 行正常数据 + $DUPS 组逐字节相同的重复"
 q1 "DROP TABLE IF EXISTS events ON CLUSTER default SYNC" >/dev/null
@@ -46,7 +46,7 @@ q1 "SYSTEM SYNC REPLICA events_dedup_keys" >/dev/null
 expect "重复的键组数" "$(q1 "SELECT count() FROM events_dedup_keys")" "$DUPS"
 
 section "前置校验一：多余行占比要低于阈值（${RATIO_LIMIT}%）"
-note "占比高过这条线说明不是零星写重，换分区只是把问题盖住，作业该中止"
+note "占比高过这条线说明不是零星写重，换分区只是把问题盖住，runbook 该中止"
 ratio=$(q1 "SELECT round((count() - uniqExact(id, version)) / count() * 100, 4) FROM events WHERE _partition_id='$PID'" | tr -d '\n')
 note "多余行占比 ${ratio}%"
 expect "占比低于 ${RATIO_LIMIT}%（1 = 是）" \
@@ -61,7 +61,7 @@ expect "哈希数大于 1 的组数" \
           AND (id, version) IN (SELECT id, version FROM events_dedup_keys)
         GROUP BY id, version HAVING h > 1)")" "0"
 
-section "第三步：作业本体，文章里那五条 SQL"
+section "第三步：runbook 本体，文章里那五条 SQL"
 run_job() {
   q1 "DROP TABLE IF EXISTS events_dedup_tmp ON CLUSTER default SYNC" >/dev/null
   q1 "CREATE TABLE events_dedup_tmp ON CLUSTER default AS events" >/dev/null

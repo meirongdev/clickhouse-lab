@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 断言（《用 REPLACE PARTITION 删掉重复行》「分区 ID 要带引号，分区表达式不要」）：
+# 断言（《清理 ClickHouse 重复行的 REPLACE PARTITION runbook》「分区 ID 要带引号，分区表达式不要」）：
 #   文档有两条不同的规则。用分区 ID 时「The partition ID must be specified in the
 #   PARTITION ID clause, in a single quotes」；用分区表达式时引号看表达式类型，
 #   Date 和 Int* 不需要引号。这张表分区键是 toYYYYMMDD(...)，值是整数。

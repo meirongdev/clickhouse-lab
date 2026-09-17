@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# 断言（《用 REPLACE PARTITION 删掉重复行》「两张表不能指到同一个 Keeper 路径」）：
+# 断言（《清理 ClickHouse 重复行的 REPLACE PARTITION runbook》「两张表不能指到同一个 Keeper 路径」）：
 #   REPLACE PARTITION 要先用 CREATE TABLE … AS 克隆一张临时表。ReplicatedMergeTree 的
 #   Keeper 路径跟着表定义走，原表路径写成字面量的话，新表会指到同一个路径上。
 #   文章原话是「两张表共用一套复制元数据」。
 #
 # 实测结论不一样：CREATE 会当场报 REPLICA_ALREADY_EXISTS，不存在悄悄共用。
 # 路径里带 {uuid} 的那种，克隆出来是另一个路径，也不共用。
-# 两个分支都不会静默出事，但跑作业前查一眼 system.replicas.zookeeper_path 仍然值得，
+# 两个分支都不会静默出事，但跑 runbook 前查一眼 system.replicas.zookeeper_path 仍然值得，
 # 因为它让你在建表之前就知道会撞。
 set -uo pipefail
 source "$(dirname "$0")/../lib.sh"
@@ -37,7 +37,7 @@ q1 "SELECT table, zookeeper_path FROM system.replicas WHERE table IN ('uuid_src'
 n=$(q1 "SELECT uniqExact(zookeeper_path) FROM system.replicas WHERE table IN ('uuid_src','uuid_clone')" | tr -d '\n')
 expect "两张表的 zookeeper_path 各不相同" "$n" "2"
 
-section "作业前该跑的那条检查"
+section "runbook 跑之前该做的那条检查"
 q1 "SELECT table, zookeeper_path FROM system.replicas WHERE table LIKE '%_src' OR table LIKE '%_clone' ORDER BY table FORMAT TSVWithNames"
 
 on_all "DROP TABLE IF EXISTS lit_src SYNC"   >/dev/null

@@ -40,8 +40,8 @@ LIMIT 20;
 ## 恢复动作
 
 - **副本在 Keeper 里残留。** `SYSTEM DROP REPLICA '<replica>'`。`DROP TABLE` 没加 `SYNC` 时，表已经不在 `system.tables` 里而 Keeper 里那个副本还在，要等 480 秒才走（lab 实测，实验 07）。补一条 `DROP TABLE IF EXISTS … SYNC` 是空跑，别指望它救场（偏差 E）。
-- **换分区作业挂在中途。** 作业开头用 `DROP TABLE IF EXISTS … SYNC`，重跑从重建临时表开始。临时表复用上次没写完的内容是最难查的一类错。
-- **写重之后要清理。** 前置校验四条：两张表的 `zookeeper_path` 不同、`PARTITION ID` 带单引号、三副本同步（`queue_size` 与 `absolute_delay`）、分区静止（作业开头与 REPLACE 之前各数一次行数，不等就中止）。
+- **换分区 runbook 挂在中途。** runbook 开头用 `DROP TABLE IF EXISTS … SYNC`，重跑从重建临时表开始。临时表复用上次没写完的内容是最难查的一类错。
+- **写重之后要清理。** 前置校验四条：两张表的 `zookeeper_path` 不同、`PARTITION ID` 带单引号、三副本同步（`queue_size` 与 `absolute_delay`）、分区静止（runbook 开头与 REPLACE 之前各数一次行数，不等就中止）。
 - **前置校验里 Keeper 路径那条的作用变了。** 实验 04 否掉了「克隆出来的表会和原表静默共用复制元数据」：路径写死成字面量时当场报 `REPLICA_ALREADY_EXISTS`，带 `{uuid}` 时各拿各的。这条检查的价值是在建表之前就知道会撞，不是防静默损坏（偏差 B）。
 - **超大小阈值的 drop 被服务端拒绝。** 那是一道保护，报错不是故障。25.3 上这两个阈值（`max_table_size_to_drop`、`max_partition_size_to_drop`）是服务端设置而不是 MergeTree 设置，具体默认值还没量过（待一手观察），在 lab 里 DROP 一张超线表就能测出来。
 - **误删分区或表之后的可救窗口。** 目前只有机制级认识，没有一手经验：`DETACH` / `ATTACH` 能找回什么、`FREEZE` 之后 `shadow/` 里躺着什么、Atomic 库的 `metadata_dropped/` 在那 480 秒里能不能救回来。这三项在没有做过一次之前，任何文档和文章都不要写「可以恢复」。
@@ -52,7 +52,7 @@ LIMIT 20;
 
 1. 误 `DROP TABLE` 之后，从 `FREEZE` 备份恢复一张表，计时。
 2. 单副本杀掉、清掉本地数据目录，看它自己 fetch 回来要多久，期间读到的数据新不新。
-3. 造一次写重，跑完整的 `REPLACE PARTITION` 作业，包含故意让分区静止校验失败那一路，看它是不是真的中止。
+3. 造一次写重，跑完整的 `REPLACE PARTITION` runbook，包含故意让分区静止校验失败那一路，看它是不是真的中止。
 4. 把一个分区打到接近 `parts_to_delay_insert`，观察拖慢和报错的先后顺序，确认与 `mechanism-map.md` 里那两个默认值一致（待建实验 11）。
 
-第 3 条本地就能做（实验 06 已经有作业本体），是这几条里唯一不需要新环境的。
+第 3 条本地就能做（实验 06 已经有 runbook 本体），是这几条里唯一不需要新环境的。

@@ -12,7 +12,7 @@
 | 三个副本数出来不一样 | 复制滞后 | `system.replicas` 的 `queue_size`、`absolute_delay` | 实验 03 覆盖一半 |
 | 删数据删不动 | mutation 队列与磁盘余量 | `system.mutations` 的 `is_done`、`latest_fail_msg` | 实验 08 的边缘 |
 | 建表或删表撞车 | Atomic 延迟删除加 Keeper 残留 | `system.replicas` 里旧 replica 是否还在 | 实验 07 |
-| 换分区之后数据少了一截 | 快照窗口 | 作业开头与 REPLACE 之前各数一次分区行数 | 实验 06 |
+| 换分区之后数据少了一截 | 快照窗口 | runbook 开头与 REPLACE 之前各数一次分区行数 | 实验 06 |
 
 ## 默认值与出处
 

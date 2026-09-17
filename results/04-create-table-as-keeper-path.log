@@ -1,4 +1,4 @@
-# 跑于 2026-09-17 08:51:44 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab a371a5e
+# 跑于 2026-09-17 09:01:30 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab c4c1e9d
 
 === 分支一：原表路径是字面量 ===
   · 原表路径：/ch/tables/01/lit_src
@@ -9,12 +9,12 @@
 === 分支二：原表路径里带 {uuid} ===
   · {uuid} 宏只在 ON CLUSTER + Atomic 库下可用，这一段走 ON CLUSTER
 table	zookeeper_path
-uuid_clone	/ch/tables/795e98f4-f1bf-47df-970d-1260f85f88ed/uuid_src
-uuid_src	/ch/tables/0a65360d-ede2-4f19-9a1a-1c70c785ccbf/uuid_src
+uuid_clone	/ch/tables/9fecb6be-49b8-4a43-9625-ae7711fd54f8/uuid_src
+uuid_src	/ch/tables/eeb85451-df9b-4f8a-8202-d52a9bb6db88/uuid_src
   [符合] 两张表的 zookeeper_path 各不相同：2
 
-=== 作业前该跑的那条检查 ===
+=== runbook 跑之前该做的那条检查 ===
 table	zookeeper_path
 lit_src	/ch/tables/01/lit_src
-uuid_clone	/ch/tables/795e98f4-f1bf-47df-970d-1260f85f88ed/uuid_src
-uuid_src	/ch/tables/0a65360d-ede2-4f19-9a1a-1c70c785ccbf/uuid_src
+uuid_clone	/ch/tables/9fecb6be-49b8-4a43-9625-ae7711fd54f8/uuid_src
+uuid_src	/ch/tables/eeb85451-df9b-4f8a-8202-d52a9bb6db88/uuid_src

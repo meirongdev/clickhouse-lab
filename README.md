@@ -9,7 +9,7 @@
 1. 用只读权限评审 ClickHouse 补数方案
 2. ClickHouse 里的重复行来自 Kafka Connect 超时重投
 3. ClickHouse 的块级去重窗口
-4. 用 REPLACE PARTITION 删掉 ClickHouse 里的重复行
+4. 清理 ClickHouse 重复行的 REPLACE PARTITION runbook
 
 ## 跑起来
 
@@ -89,7 +89,7 @@ docs/                   日常排查用的知识，索引在 docs/README.md
 | 03 | 一个块只在写入的副本记 `NewPart`，另两个记 `DownloadPart` | 文章三 | 成立 |
 | 04 | `CREATE TABLE … AS` 克隆临时表时 Keeper 路径怎么走 | 文章四 | **要改**，见偏差 B |
 | 05 | `PARTITION ID` 要带引号，分区表达式不要 | 文章四 | **要改**，见偏差 C |
-| 06 | 临时表加 `REPLACE PARTITION` 的整套清理作业 | 文章四 | 成立 |
+| 06 | 临时表加 `REPLACE PARTITION` 的整套清理 runbook | 文章四 | 成立 |
 | 07 | 临时表要用 `DROP … SYNC` 开头 | 文章四 | 成立，可补一条，见偏差 E |
 | 08 | mutation 只重写被改的列，其余 hardlink | 文章一 | 成立 |
 

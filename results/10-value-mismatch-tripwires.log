@@ -1,4 +1,4 @@
-# 跑于 2026-09-17 09:44:11 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab c56afe2
+# 跑于 2026-09-17 09:48:26 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 067dcbc
 
 === 服务端时区（下面那两张表的对照基准） ===
 server_tz
@@ -45,6 +45,10 @@ k	v
 0	v1
 1	v1
 2	v1
-  · 这一轮取到的都是 v1，也就是右表里先出现的那一行
-  · 但这只是本轮观测：取哪一行跟 join 算法和右表的物理顺序有关，官方措辞仍然待核，
-  · 别据此在文档里写死「ANY JOIN 取第一行」。要确定性就自己 LIMIT 1 BY 排序列。
+  · 默认取到的都是 v1，也就是右表里先出现的那一行
+  · 但这不是 ANY JOIN 的性质，是一个设置的当前取值：join_any_take_last_row 直接翻转它
+  [符合] join_any_take_last_row = 0（默认）取先出现的那行：v1,v1,v1
+  [符合] join_any_take_last_row = 1 取后出现的那行：v2,v2,v2
+  · 官方 JOIN 语句页没有写 ANY 保留哪一行（已核，2026-09-17 读的那一页只列了 ANY 的语法
+  · 和 join_any_take_last_row 这个设置，没有措辞承诺是第一行）。所以别在文档里写死
+  · 「ANY JOIN 取第一行」——它连默认值都是可配的。要确定性就自己 LIMIT 1 BY 加排序列。

@@ -108,8 +108,9 @@ docker exec ch1 bash -c 'exec 3<>/dev/tcp/keeper/9181 && printf mntr >&3 && time
 
 lab 里 standalone 无所谓，生产不行：既是单点，又没有 quorum。而且那次事故的前兆恰恰在 Keeper 层（在途请求从常态 5~15 涨到几千，生产事实）。
 
-- 3 节点容 1 台、5 节点容 2 台；不要偶数，只增加投票成本不增加容错（raft 常识，**具体到 ClickHouse Keeper 的推荐部署待核官方页**）。要说服人的话，实验 12 的那张表比任何论证都直接：单点一停，整个集群的写在 142 秒的卡顿之后全部转只读。
-- Keeper 的瓶颈一般在 fsync 延迟，建议给独立盘、别和 CH 数据盘抢 IO（**待核**）。小集群可以用 `clickhouse-server` 内嵌 `<keeper_server>`，规模上来之后拆开（**待核**）。
+- **3 节点容 1 台**：官方 Keeper 页的原话是「for a 3-node cluster, it will continue working correctly if only 1 node crashes」（已核，2026-09-17）。要说服人的话，实验 12 的那张表比任何论证都直接：单点一停，整个集群的写在 142 秒的卡顿之后全部转只读。
+- **奇数节点**：官方那一页**并没有**讲奇偶数的取舍，这条是 raft 常识，不是 ClickHouse 文档的说法（判断，别当官方结论引）。
+- **盘**：`force_sync` 默认 `true`，也就是每写一条 coordination log 都要 `fsync`；并且官方页明说「only disks of type `local` support persistent sync」（已核，2026-09-17）。所以 Keeper 的数据目录要放本地盘，别放网络盘或共享存储。至于要不要和 CH 数据盘物理分开、小集群能不能内嵌 `<keeper_server>`，官方页没有给建议（判断，**待一手观察**）。
 - `zoo_keeper_request` 在途请求纳入基线告警 —— 这条 `daily-checklist.md` 里已经有了。
 
 托管服务下这一层碰不到，但**该问服务商拿到 Keeper 的监控指标**，否则下次抖动还是只能看结果不能看原因。
@@ -150,6 +151,6 @@ lab 里一个都没有：RBAC 与 TLS、profile 兜底（`max_memory_usage`、`m
 
 1. **`exactlyOnce` 打开之后到底发生什么**（待一手观察）。要 Kafka + Connect + 一个能卡住连接的代理，工程量比现在这套大一档，根 README 里已经列为本地复现不了的一项。
 2. **`ReplacingMergeTree` + `FINAL` 在这个数据量下的查询代价**（待一手观察）。本地能测，造两亿行是唯一的门槛。这是这份文档里最该补的一条——第 1 条建议的落地方式就压在它上面。
-3. **ClickHouse Keeper 的推荐部署形状**（待核）：节点数、盘、内嵌还是独立，以官方页为准，别照搬 ZooKeeper 的经验。实验 12 验的是「单点挂了会怎样」，不是「几个节点才够」，这两件事别混。
+3. **Keeper 放在哪台机器上**（待一手观察）：3 节点容 1 台、`force_sync` 默认开、只有 local 盘保证持久化，这三条已经从官方页核过了（见第 2 条）；但「要不要和 CH 分机器」「小集群内嵌够不够」官方没给建议，得自己压一次才知道。实验 12 验的是「单点挂了会怎样」，不是「几个节点才够」，这两件事别混。
 4. **ClickHouse Cloud 和 Altinity operator 的实际能力**（待核）：上表里那两行是道听途说，做选型决策之前必须自己核。
 5. ~~**备份恢复演练**~~ → 部分做掉了：实验 13 验了 `DETACH`/`ATTACH`、`UNDROP`、`FREEZE` 后 `shadow/` 里躺着什么，结果记在 `daily-checklist.md` 的「恢复动作」那张表里。**还缺**完整的「从 `FREEZE` 备份还原一张表并计时」，以及副本重建（杀掉一个副本、清空数据目录、看它 fetch 回来要多久）。

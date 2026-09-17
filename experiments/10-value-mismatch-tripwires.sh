@@ -89,9 +89,18 @@ section "ANY JOIN 保留的是哪一行"
 q1 "WITH l AS (SELECT number AS k FROM numbers(3)),
          r AS (SELECT number AS k, concat('v', toString(i)) AS v FROM numbers(3) ARRAY JOIN [1,2] AS i)
     SELECT k, v FROM l ANY LEFT JOIN r USING (k) ORDER BY k FORMAT TSVWithNames"
-note "这一轮取到的都是 v1，也就是右表里先出现的那一行"
-note "但这只是本轮观测：取哪一行跟 join 算法和右表的物理顺序有关，官方措辞仍然待核，"
-note "别据此在文档里写死「ANY JOIN 取第一行」。要确定性就自己 LIMIT 1 BY 排序列。"
+note "默认取到的都是 v1，也就是右表里先出现的那一行"
+note "但这不是 ANY JOIN 的性质，是一个设置的当前取值：join_any_take_last_row 直接翻转它"
+any_rows() { q1 "WITH l AS (SELECT number AS k FROM numbers(3)),
+                      r AS (SELECT number AS k, concat('v', toString(i)) AS v FROM numbers(3) ARRAY JOIN [1,2] AS i)
+                 SELECT arrayStringConcat(groupArray(v), ',') FROM (
+                   SELECT v FROM l ANY LEFT JOIN r USING (k) ORDER BY k
+                 ) SETTINGS join_any_take_last_row = $1" | tr -d '\n'; }
+expect "join_any_take_last_row = 0（默认）取先出现的那行" "$(any_rows 0)" "v1,v1,v1"
+expect "join_any_take_last_row = 1 取后出现的那行"        "$(any_rows 1)" "v2,v2,v2"
+note "官方 JOIN 语句页没有写 ANY 保留哪一行（已核，2026-09-17 读的那一页只列了 ANY 的语法"
+note "和 join_any_take_last_row 这个设置，没有措辞承诺是第一行）。所以别在文档里写死"
+note "「ANY JOIN 取第一行」——它连默认值都是可配的。要确定性就自己 LIMIT 1 BY 加排序列。"
 
 q1 "DROP TABLE IF EXISTS tz_utc ON CLUSTER default SYNC" >/dev/null
 q1 "DROP TABLE IF EXISTS tz_sh ON CLUSTER default SYNC" >/dev/null

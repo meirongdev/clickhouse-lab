@@ -1,10 +1,14 @@
+# 镜像钉到补丁号 + digest。`25.3` 是滚动 tag，补丁号会自己往前走，results/ 里的数字就会
+# 在没人动脚本的情况下变。升级的做法是改下面这两行（tag 和 digest 一起换）、重跑 run-all.sh、
+# 再回 docs/mechanism-map.md 对一遍默认值——实验 01 会第一个炸出去重窗口那两个值的变化。
+#   docker buildx imagetools inspect clickhouse/clickhouse-server:<tag> --format '{{.Manifest.Digest}}'
 services:
   keeper:
-    image: clickhouse/clickhouse-keeper:25.3
+    image: clickhouse/clickhouse-keeper:25.3.14.14@sha256:2c8b97bb628999adfa597172091ce495304e0a260d791fe6e475d64a314193b4
     container_name: ch-keeper
     volumes: [./cfg/keeper.xml:/etc/clickhouse-keeper/keeper_config.xml:ro]
   ch1: &node
-    image: clickhouse/clickhouse-server:25.3
+    image: clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2
     container_name: ch1
     hostname: ch1          # 不设的话 hostName() 返回容器 ID，clusterAllReplicas 的输出就认不出副本
     depends_on: [keeper]

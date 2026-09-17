@@ -36,19 +36,21 @@ bash experiments/02-dedup-window-overflow.sh
 # 跑于 2026-09-17 08:50:39 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server@sha256:b627d7a9… | lab 未提交
 ```
 
-镜像 tag 写的是 `25.3` 这种滚动 tag，补丁号会自己往前走，digest 是判断两份 log 能不能对比的唯一依据。
+镜像那一项读的是 ch1 容器实际用的引用，和 compose 里钉的那行是同一个 digest。两份 log 能不能拿来对比，看的就是这一项。
 
 ## 集群长什么样
 
 | | |
 |---|---|
-| 版本 | `clickhouse/clickhouse-server:25.3`，实跑 25.3.14.14 |
+| 版本 | 钉到 `25.3.14.14@sha256:b627d7a9…`（tag + digest） |
 | 拓扑 | 1 keeper + 3 clickhouse-server，1 shard × 3 replicas |
 | cluster 名 | `default` |
-| Keeper | 单节点 `clickhouse/clickhouse-keeper:25.3` |
+| Keeper | 单节点，同样钉到 `25.3.14.14@sha256:2c8b97bb…` |
 | HTTP 端口 | ch1 `18123`、ch2 `18124`、ch3 `18125` |
 
-版本钉在 25.3 是为了对齐生产（25.3.14.1）。去重窗口那两个默认值在 25.9 和 25.10 各改过一次，换个大版本实验 01 就对不上了。
+版本钉在 25.3 这条 LTS 是为了对齐生产（25.3.14.1）。去重窗口那两个默认值在 25.9 和 25.10 各改过一次，换个大版本实验 01 就对不上了。
+
+`docker-compose.yml` 里钉的是补丁号加 digest，不是 `25.3` 那种滚动 tag：滚动 tag 会让补丁号自己往前走，没人动过脚本，`results/` 里的数字却变了，而这个 lab 存在的意义就是那些数字可比。要升级就改 compose 里那两行（tag 和 digest 一起换）、重跑 `run-all.sh`、再回 `docs/mechanism-map.md` 对一遍默认值。
 
 拓扑照着 Aiven 的[服务架构](https://aiven.io/docs/products/clickhouse/concepts/service-architecture)：单 shard 三节点、无主从、连接随机落到任一节点。`lib.sh` 里的 `rr` 就是拿来模拟这个随机落点的，实验 02 靠它验「写在 ch1、重投打到 ch2 也认得出来」。
 

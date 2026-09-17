@@ -15,7 +15,7 @@
 | Keeper 在途请求 | `clickhouse_metrics_zoo_keeper_request` | 生产基线是 5 到 15（生产事实） | 涨到几百倍就是停摆前兆，去看复制队列和插入尾部，别等只读告警 |
 | 磁盘与冷热层 | `system.disks`，按表和分区聚合 `system.parts.bytes_on_disk` | 冷层占比、增速 | 提前算重建一个分区要从冷层拉多少回来，别在事故里第一次算 |
 | 服务端错误计数 | `system.errors` 非零项 | 任一新出现的名目 | 顺着 name 去 `system.query_log` 找具体查询 |
-| 默认值漂移 | 升级后重跑实验 01 与实验 07 | 与 `mechanism-map.md` 对不上 | 更新那张表，顺带检查文章里的版本断言 |
+| 默认值漂移 | 升级后重跑实验 01 与实验 07（升级 = 动 `docker-compose.yml` 里钉的那两行 tag + digest） | 与 `mechanism-map.md` 对不上 | 更新那张表，顺带检查文章里的版本断言 |
 
 巡检 SQL 起步：
 

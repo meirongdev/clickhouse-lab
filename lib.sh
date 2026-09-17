@@ -46,14 +46,15 @@ wait_znodes() {
   printf '  等了 %ss 仍未降到 %s\n' "$timeout" "$target"; return 1
 }
 
-# provenance  每份 log 的第一行：跑的时间、服务端版本、镜像 digest、lab 的 git rev。
-# results/ 是要提交进仓库当证据的，没有这一行就分不清某份 log 是哪天、哪个镜像、哪一版脚本跑出来的
-# —— 镜像 tag 是 25.3 这种滚动 tag，补丁号会自己往前走。取不到的字段填「未知」，不让它中断实验。
+# provenance  每份 log 的第一行：跑的时间、服务端版本、镜像、lab 的 git rev。
+# results/ 是要提交进仓库当证据的，没有这一行就分不清某份 log 是哪天、哪个镜像、哪一版脚本跑出来的。
+# 镜像那一项读的是本机 ch1 容器实际用的引用（compose 里钉了 digest），不是写死在这里的 tag，
+# 免得钉的和记的两边分头漂。取不到的字段填「未知」，不让它中断实验。
 provenance() {
   local ver img rev root
   root=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
   ver=$(q1 "SELECT version()" 2>/dev/null | tr -d '\n')
-  img=$(docker inspect -f '{{index .RepoDigests 0}}' clickhouse/clickhouse-server:25.3 2>/dev/null) || img=未知
+  img=$(docker inspect -f '{{.Config.Image}}' ch1 2>/dev/null) || img=未知
   rev=$(git -C "$root" rev-parse --short HEAD 2>/dev/null) || rev=未提交
   printf '# 跑于 %s | 服务端 %s | 镜像 %s | lab %s\n' \
     "$(date '+%F %T %z')" "${ver:-未知}" "${img:-未知}" "${rev:-未提交}"

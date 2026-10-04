@@ -1,0 +1,52 @@
+# 跑于 2026-10-04 21:29:00 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 2cbfb6b
+
+=== 一、第 1 步：CREATE TABLE … LIKE ===
+  返回：Code: 62. DB::Exception: Syntax error: failed at position 23 (LIKE): LIKE st_a. Expected one of: token sequenc
+  [符合] 25.3 不认 LIKE，第 1 步原样执行就会停在这里（什么都没写）
+  · ClickHouse 的写法是 CREATE TABLE … AS 原表（实验 04：原表路径带 {uuid} 才建得出来）
+
+=== 二、第 2 步：min(create_time) AS create_time 会顶替掉 argMin 里的列 ===
+  返回：Code: 184. DB::Exception: Aggregate function min(create_time) AS create_time is found inside another aggregate function 
+  [符合] 别名优先于同名列，argMin(x, create_time) 变成了 argMin(x, min(create_time))，原样执行报 184
+  [符合] 报错之后临时表里的行数：0
+  · 下面各段都给第 2 步加 SETTINGS prefer_column_name_to_alias = 1，让它按方案本意跑下去
+
+=== 五（先跑基线）：表的列序和方案一致，修掉前两处之后整套能不能清干净 ===
+  [符合] 方案校验 1：临时表窗口内重复数：0
+  [符合] 方案校验 2：原表 − 临时表：18
+  [符合] 换完之后当天行数：100000
+  [符合] 标准答案：新分区里找不到原样的行：0
+  [符合] 标准答案：丢了的键：0
+  [符合] 标准答案：剩下的重复键：0
+  [符合] 晚 5 秒那 6 份没留下来（留下的都是最早那份）：0
+  [符合] 前一天、后一天的行数没动：1000,1000
+  [符合] 三个副本当天行数：100000,100000,100000
+
+=== 三(a)、表里 player/agent 两列的物理顺序和方案的 SELECT 列表相反（同类型） ===
+  [符合] 方案校验 1：临时表窗口内重复数：0
+  [符合] 方案校验 2：原表 − 临时表：18
+  [符合] 换完之后当天行数（方案的最终核对）：100000
+  [符合] 标准答案：新分区里找不到原样的行（= 窗口里每一行）：3125
+  [符合] 窗口里 player 列装着 agent 的值的行数：3125
+  · 坏的不止那 18 份重复：GROUP BY 把窗口里每一行都重建了一遍，列序一错就是整个窗口
+
+=== 三(b)、表里 rev 排在 settle_ms 前面（键列对调） ===
+  · UInt64 的毫秒时间戳按位置塞进 UInt16 的 rev，不报错，截成低 16 位；settle_ms 拿到 0
+tmp_partition	rows
+19700101	3125
+20260918	96875
+  [符合] 方案校验 1：临时表窗口内重复数（窗口里已经没有行了）：0
+  [符合] 方案校验 2：原表 − 临时表：18
+  [符合] 换完之后当天行数（只有方案的最终核对能发现，而且是换完之后）：96875
+  [符合] 换完之后窗口里剩几行：0
+  [符合] 标准答案：丢了的键（= 窗口里每一个键）：3125
+
+=== 四、argMin 跳过 NULL：两份内容不同时会拼出一行原来没有的数据 ===
+ct	memo
+2026-09-18 10:00:01.000	from-retry
+  [符合] argMin 拼出来的那行：create_time 来自第一份、memo 来自第二份：2026-09-18 10:00:01.000|from-retry
+  · 实验 06 的前置校验二（每组业务列哈希数必须是 1）能先拦下它，但哈希要包一层 tuple：
+  · cityHash64 的参数里只要有一个 NULL，结果就是 NULL，uniqExact 再把 NULL 跳过，两种内容只数出一种
+  [符合] 直接 cityHash64(…, memo)：这组的哈希数（漏数）：1
+  [符合] cityHash64(tuple(…, memo))：这组的哈希数：2
+  · 生产那批已核对的重复除 create_time 外逐列相同，这一条不会咬到这次；换别的数据复用这段 SQL 时会

@@ -64,7 +64,7 @@ run-all.sh              跑全部实验并存 results/
 lib.sh                  共用函数：q / on_all / rr / expect / wait_znodes
 docker-compose.yml
 cfg/                    keeper、cluster、三个节点的 macros
-experiments/            13 个实验脚本，每个开头写了它验的是哪条断言
+experiments/            18 个实验脚本，每个开头写了它验的是哪条断言
 results/                实跑输出，每份 log 第一行是出处
 docs/                   日常排查用的知识，索引在 docs/README.md
 ```
@@ -106,6 +106,16 @@ docs/                   日常排查用的知识，索引在 docs/README.md
 | 14 | `ReplacingMergeTree` + `FINAL` 到底贵在哪 | `deployment-architecture.md` 第 1 条 | 重投能被折叠（1050 万物理行 → `FINAL` 读到 1000 万）；代价跟着重叠 part 数走（合成 1 个 part 后快五到七倍）；比手写去重便宜两个数量级 |
 
 还没做的实验也记在 `docs/` 里，按编号找：待建实验 09（坏批次进没进 DLQ，要 Kafka）、待建实验 15（单个日分区 5 亿行的 `FINAL` 代价，本机能做，可行性已经算过）。
+
+16–20 不对文章负责，是拿这套 lab 评审一份准备交给 SRE 执行的重复行清理方案（临时表 + `argMin` 重建窗口 + `REPLACE PARTITION`）。测试方案、假设清单和结论在 [docs/review-dedup-replace-plan.md](docs/review-dedup-replace-plan.md)：
+
+| # | 验的是什么 | 量到了什么 |
+|---|---|---|
+| 16 | 方案的 SQL 原文逐条跑 | `CREATE TABLE … LIKE` 报 `SYNTAX_ERROR`；`min(create_time) AS create_time` 让后面的 `argMin` 报 `ILLEGAL_AGGREGATION`；`INSERT … SELECT` 按位置对列，列序一错整个窗口 3,125 行坏掉或丢掉，方案那两条校验照样全过；`cityHash64` 遇 NULL 返回 NULL，哈希不包 `tuple` 会漏数 |
+| 17 | 换分区的时机 | 建完临时表之后写进来的 50 行被静默抹掉；从落后副本建临时表，三个副本一起丢 30 行；只查当前节点时，落后副本还挂着 18 个重复键，核对却是绿的。`REPLACE_RANGE` 落地的 part 在 part_log 里记 `NewPart` |
+| 18 | 被否掉的轻量删除（按 `_part_offset`） | 原文报 `Code: 36`；放开之后读窗口的遍数约等于全表 part 数 / 2（62 → 34 遍，122 → 61 遍），全表每个 part 都被改一版；加 `IN PARTITION` 后只读 1 遍、只碰当天的 part。不带子查询的字面量 DELETE 不加 `IN PARTITION` 一样改全表（124 / 124）；两份 `create_time` 相同时按 `create_time` 删会两份一起删 |
+| 19 | 改过的 runbook 整套跑 | 快照、两道闸、全副本核对、part_log 检查分别拦下 17 的三种情形；回滚后和原分区逐行一致 |
+| 20 | `ATTACH PARTITION … FROM` / `REPLACE PARTITION` 复不复用文件 | 快照、换分区、回滚三条语句的 part 都和来源共用 inode、写入 0 行（本地盘；S3 没验）；换分区后旧文件由快照表留着 |
 
 实验 12 那个 142 秒值得单拎出来：生产上 Connect 的 socket 超时是 30 秒，也就是**客户端在第 30 秒就超时重投了，而服务端这边还要再重试一百多秒**。文章二那条重复行的链路，起点就在这段错位上。
 

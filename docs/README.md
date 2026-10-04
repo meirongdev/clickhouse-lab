@@ -8,6 +8,7 @@
 | `data-problems.md` | 多了 / 少了 / 不对三类问题的排查顺序，含对账口径 |
 | `daily-checklist.md` | 固定跑的巡检、出事时的恢复动作、需要演练的条目 |
 | `deployment-architecture.md` | lab 的部署形状（实测）、和生产的差别、生产选型的判断与依据 |
+| `review-dedup-replace-plan.md` | 评审一份 REPLACE PARTITION 去重方案：测试方案、实验 16–20 的结论、改过的 runbook、近2年行业方案对比与外部参考 |
 
 ## 标注约定
 

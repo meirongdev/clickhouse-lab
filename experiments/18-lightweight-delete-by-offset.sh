@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+# 断言（同一份方案里被否掉的「方法一」，见 docs/review-dedup-replace-plan.md）：
+#   方法一用轻量删除：DELETE FROM t WHERE (_part, _part_offset) IN (子查询)，子查询在窗口里按
+#   (id, 结算时间, 版本) 开窗 row_number()，按 create_time, _part, _part_offset 排，删掉排名 > 1 的。
+#   方案否掉它的理由是「表一天两亿行，直接 DELETE 会吃满 CPU 和磁盘 IO」。
+#
+# 这里验四件事：
+#   一、原文在 ReplicatedMergeTree 上能不能执行；
+#   二、放开 allow_nondeterministic_mutations 之后：结果对不对、三个副本一不一样；它读了多少行、
+#       改了哪些 part —— 读的行数是跟着「当天分区的行数」走，还是跟着「全表 part 数」走；
+#   三、加上 IN PARTITION 之后这两个数怎么变；
+#   四、轻量删除之后，system.parts 的 rows 还算不算被标删的行（方案的最终核对用的是它）；
+#   五、不带子查询、只写字面量键的轻量删除，不加 IN PARTITION 会不会也改全表；
+#   六、「按 create_time 删较晚那份」遇到两份 create_time 相同时会怎样。
+# 读的行数用每个节点 system.events 里 SelectedRows 的增量来量（lab 没有别的负载；看 ch2，
+# ch1 上会混进本脚本自己的查询）。
+set -uo pipefail
+source "$(dirname "$0")/../lib.sh"
+require_cluster
+provenance
+FAILED=0
+
+PID=20260918
+DAY=1789689600000
+W0=1789725600000; W1=1789728300000
+WIN=100000            # 窗口里的行数：这个实验要量的是「子查询读几遍窗口」，窗口做大一点读数才稳
+D=3
+T=ev18
+
+selected() { q2 "SELECT value FROM system.events WHERE event = 'SelectedRows'" | tr -d '\n'; }
+# 子查询照方法一原文：内层 IN 找重复键，外层开窗排名
+SUBQ="SELECT _part, _part_offset FROM (
+        SELECT _part, _part_offset,
+               row_number() OVER (PARTITION BY id, settle_ms, rev ORDER BY create_time, _part, _part_offset) AS rk
+        FROM $T WHERE settle_ms BETWEEN $W0 AND $W1
+          AND (id, settle_ms, rev) IN (SELECT id, settle_ms, rev FROM $T WHERE settle_ms BETWEEN $W0 AND $W1
+                                       GROUP BY id, settle_ms, rev HAVING count() > 1))
+      WHERE rk > 1"
+add_dups() {
+  q1 "INSERT INTO $T SELECT concat('k', toString(number)), $W0 + number * 20, 0,
+        toDateTime64('2026-09-18 10:00:05', 3, 'UTC'), 'dup' FROM numbers($D)"
+  q1 "SYSTEM SYNC REPLICA $T" >/dev/null
+}
+# run_delete <DELETE 语句>  执行、等 mutation 跑完，回显「读的行数 / 一遍窗口的行数（两层子查询各读一遍）」和改了几个 part
+run_delete() {
+  local b a t0
+  q1 "SYSTEM FLUSH LOGS" >/dev/null
+  t0=$(q1 "SELECT now64(6)" | tr -d '\n')
+  b=$(selected)
+  q1 "$1"
+  wait_mutation $T 300 >/dev/null || { echo "  mutation 没跑完"; FAILED=1; }
+  a=$(selected)
+  q1 "SYSTEM FLUSH LOGS" >/dev/null
+  READ=$((a - b))
+  RATIO=$(python3 -c "print(round($READ / (2 * ($WIN + $D)), 1))")
+  MUTATED=$(q1 "SELECT countIf(event_type = 'MutatePart') FROM system.part_log
+                WHERE database = currentDatabase() AND table = '$T' AND event_time_microseconds >= '$t0'" | tr -d '\n')
+  MUTATED_OTHER=$(q1 "SELECT countIf(event_type = 'MutatePart' AND partition_id != '$PID') FROM system.part_log
+                      WHERE database = currentDatabase() AND table = '$T' AND event_time_microseconds >= '$t0'" | tr -d '\n')
+  note "ch2 读了 $READ 行 = 窗口的 ${RATIO} 遍；改了 $MUTATED 个 part，其中别的分区 $MUTATED_OTHER 个"
+}
+parts() { q1 "SELECT count() FROM system.parts WHERE database = currentDatabase() AND table = '$T' AND active" | tr -d '\n'; }
+add_days() {  # add_days <从第几天> <天数>  往前补若干天，每天 1000 行、各自一个 part（一个分区只有一个 part，不会合并）
+  q1 "INSERT INTO $T SELECT concat('o', toString($1), '-', toString(number)),
+        $DAY - ($1 + intDiv(number, 1000)) * 86400000 + (number % 1000) * 1000, 0, now64(3), 'x'
+      FROM numbers($2 * 1000) SETTINGS max_partitions_per_insert_block = 1000"
+  q1 "SYSTEM SYNC REPLICA $T" >/dev/null
+}
+
+section "准备：60 个别的日分区各 1 个 part；当天窗口 $WIN 行一个 part，外加 $D 份重复"
+q1 "DROP TABLE IF EXISTS $T ON CLUSTER default SYNC" >/dev/null
+q1 "CREATE TABLE $T ON CLUSTER default (id String, settle_ms UInt64, rev UInt16, create_time DateTime64(3, 'UTC'), v String)
+    ENGINE = ReplicatedMergeTree('/ch/tables/{uuid}/$T', '{replica}')
+    PARTITION BY toYYYYMMDD(toDateTime(settle_ms / 1000)) ORDER BY (settle_ms, id, rev)" >/dev/null
+add_days 1 60
+q1 "INSERT INTO $T SELECT concat('k', toString(number)), $W0 + number * 20, 0, toDateTime64('2026-09-18 10:00:00', 3, 'UTC'), 'x'
+    FROM numbers($WIN)"
+add_dups
+note "active part 数：$(parts)"
+
+section "一、方法一原文"
+out=$(q1 "DELETE FROM $T WHERE (_part, _part_offset) IN ($SUBQ)")
+printf '  返回：%s\n' "$(echo "$out" | head -1 | cut -c1-130)"
+case "$out" in
+  *allow_nondeterministic_mutations*) echo "  [符合] 带子查询的 mutation 在 Replicated 表上默认被拒，原样执行什么都不会删" ;;
+  *) echo "  [不符] 没有按预期被拒"; FAILED=1 ;;
+esac
+
+section "二、放开 allow_nondeterministic_mutations，不限分区"
+run_delete "DELETE FROM $T WHERE (_part, _part_offset) IN ($SUBQ) SETTINGS allow_nondeterministic_mutations = 1"
+R62=$RATIO
+expect "三个副本当天行数" "$(q1 "SELECT arrayStringConcat(groupArray(toString(c)), ',') FROM (SELECT hostName() h, count() c
+         FROM clusterAllReplicas('default', currentDatabase(), $T) WHERE _partition_id = '$PID' GROUP BY h ORDER BY h)")" "$WIN,$WIN,$WIN"
+expect "留下的是 create_time 最早的那份（晚 5 秒的副本还剩）" "$(q1 "SELECT count() FROM $T WHERE v = 'dup'")" "0"
+expect "全表每个 part 都被改了一版（改的 part 数 = 当时的 part 数 62）" "$MUTATED" "62"
+expect "子查询读了不止一遍（窗口遍数 > 10）" "$(python3 -c "print(int($R62 > 10))")" "1"
+
+note "再补 60 个日分区（part 数翻倍），同一条 DELETE 再跑一次"
+add_days 61 60; add_dups
+note "active part 数：$(parts)"
+run_delete "DELETE FROM $T WHERE (_part, _part_offset) IN ($SUBQ) SETTINGS allow_nondeterministic_mutations = 1"
+R122=$RATIO
+note "part 数 62 → 122，读窗口的遍数 $R62 → $R122"
+expect "遍数跟着全表 part 数近似翻倍（比值在 1.6–2.4 之间）" "$(python3 -c "print(int(1.6 < $R122 / $R62 < 2.4))")" "1"
+note "外层再加 settle_ms 的范围条件也没用：mutation 不按 WHERE 裁 part，照样每个 part 过一遍"
+add_dups
+run_delete "DELETE FROM $T WHERE settle_ms BETWEEN $W0 AND $W1 AND (_part, _part_offset) IN ($SUBQ)
+            SETTINGS allow_nondeterministic_mutations = 1"
+expect "加了范围条件之后别的分区被改的 part 数（> 0 就是没裁掉）" "$(python3 -c "print(int($MUTATED_OTHER > 0))")" "1"
+
+section "三、加上 IN PARTITION ID '$PID'"
+add_dups
+run_delete "DELETE FROM $T IN PARTITION ID '$PID' WHERE (_part, _part_offset) IN ($SUBQ)
+            SETTINGS allow_nondeterministic_mutations = 1"
+expect "子查询只读了约一遍窗口（遍数 < 1.5）" "$(python3 -c "print(int($RATIO < 1.5))")" "1"
+expect "别的分区被改的 part 数" "$MUTATED_OTHER" "0"
+expect "结果仍然对：当天行数" "$(q1 "SELECT count() FROM $T WHERE _partition_id = '$PID'")" "$WIN"
+
+section "四、轻量删除之后 system.parts 的 rows 还算着被标删的行"
+add_dups
+q1 "DELETE FROM $T IN PARTITION ID '$PID' WHERE (_part, _part_offset) IN ($SUBQ) SETTINGS allow_nondeterministic_mutations = 1"
+wait_mutation $T 120 >/dev/null
+c=$(q1 "SELECT count() FROM $T WHERE _partition_id = '$PID'" | tr -d '\n')
+r=$(q1 "SELECT sum(rows) FROM system.parts WHERE database = currentDatabase() AND table = '$T' AND partition_id = '$PID' AND active" | tr -d '\n')
+note "count() = $c，system.parts sum(rows) = $r"
+expect "system.parts 比 count() 多出来的行（至少是这一次的 $D）" "$(python3 -c "print(int($r - $c >= $D))")" "1"
+expect "带轻量删除标记的 part 数 > 0" "$(q1 "SELECT countIf(has_lightweight_delete) > 0 FROM system.parts
+         WHERE database = currentDatabase() AND table = '$T' AND partition_id = '$PID' AND active")" "1"
+note "所以用方法一时不能拿 system.parts 的 sum(rows) 当核对，要用 count()；方法二换进来的 part 没有标记，两者一致"
+
+section "五、不带子查询、只写字面量键的轻量删除，不加 IN PARTITION 照样改全表每个 part"
+note "常见的另一种写法：先把要删的键和那份副本的 create_time 查出来，再贴成字面量去删（确定性的，不需要 allow_nondeterministic_mutations）"
+q1 "INSERT INTO $T SELECT 'lit-a', $W0 + 1, 0, toDateTime64('2026-09-18 10:00:00', 3, 'UTC'), 'x'"
+q1 "INSERT INTO $T SELECT 'lit-a', $W0 + 1, 0, toDateTime64('2026-09-18 10:00:47', 3, 'UTC'), 'x'"
+q1 "SYSTEM SYNC REPLICA $T" >/dev/null
+p_before=$(parts)
+q1 "SYSTEM FLUSH LOGS" >/dev/null; t0=$(q1 "SELECT now64(6)" | tr -d '\n')
+q1 "DELETE FROM $T WHERE (id, settle_ms, rev) IN (('lit-a', $((W0 + 1)), 0)) AND create_time = '2026-09-18 10:00:47'"
+wait_mutation $T 120 >/dev/null
+q1 "SYSTEM FLUSH LOGS" >/dev/null
+m_all=$(q1 "SELECT countIf(event_type = 'MutatePart') FROM system.part_log WHERE database = currentDatabase() AND table = '$T' AND event_time_microseconds >= '$t0'" | tr -d '\n')
+m_other=$(q1 "SELECT countIf(event_type = 'MutatePart' AND partition_id != '$PID') FROM system.part_log WHERE database = currentDatabase() AND table = '$T' AND event_time_microseconds >= '$t0'" | tr -d '\n')
+note "当时 active part $p_before 个；这条 DELETE 改了 $m_all 个 part，其中别的分区 $m_other 个"
+expect "改的 part 数 = 当时的全部 part 数" "$m_all" "$p_before"
+expect "删对了：晚 47 秒那份没了，早的那份还在" "$(q1 "SELECT groupArray(toString(create_time)) FROM $T WHERE id = 'lit-a'")" "['2026-09-18 10:00:00.000']"
+
+section "六、两份 create_time 相同时，「按 create_time 删较晚那份」会两份一起删掉"
+q1 "INSERT INTO $T SELECT 'tie-a', $W0 + 2, 0, toDateTime64('2026-09-18 10:00:00', 3, 'UTC'), 'x'"
+q1 "INSERT INTO $T SELECT 'tie-a', $W0 + 2, 0, toDateTime64('2026-09-18 10:00:00', 3, 'UTC'), 'x'"
+q1 "SYSTEM SYNC REPLICA $T" >/dev/null
+q1 "DELETE FROM $T IN PARTITION ID '$PID' WHERE (id, settle_ms, rev) IN (('tie-a', $((W0 + 2)), 0)) AND create_time = '2026-09-18 10:00:00'"
+wait_mutation $T 120 >/dev/null
+expect "这个键还剩几行（两份都被删了）" "$(q1 "SELECT count() FROM $T WHERE id = 'tie-a'")" "0"
+note "同一秒写进来的两份（DateTime 精度到秒时很常见）用 create_time 分不开，只能靠 _part/_part_offset 或整分区重写"
+
+q1 "DROP TABLE IF EXISTS $T ON CLUSTER default SYNC" >/dev/null
+exit $FAILED

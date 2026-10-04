@@ -1,0 +1,45 @@
+# 跑于 2026-10-04 21:29:09 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 2cbfb6b
+
+=== 准备：60 个别的日分区各 1 个 part；当天窗口 100000 行一个 part，外加 3 份重复 ===
+  · active part 数：62
+
+=== 一、方法一原文 ===
+  返回：Code: 36. DB::Exception: ALTER UPDATE/ALTER DELETE statement with subquery may be nondeterministic, see allow_nondeterministic_mut
+  [符合] 带子查询的 mutation 在 Replicated 表上默认被拒，原样执行什么都不会删
+
+=== 二、放开 allow_nondeterministic_mutations，不限分区 ===
+  · ch2 读了 6876681 行 = 窗口的 34.4 遍；改了 62 个 part，其中别的分区 60 个
+  [符合] 三个副本当天行数：100000,100000,100000
+  [符合] 留下的是 create_time 最早的那份（晚 5 秒的副本还剩）：0
+  [符合] 全表每个 part 都被改了一版（改的 part 数 = 当时的 part 数 62）：62
+  [符合] 子查询读了不止一遍（窗口遍数 > 10）：1
+  · 再补 60 个日分区（part 数翻倍），同一条 DELETE 再跑一次
+  · active part 数：122
+  · ch2 读了 12232608 行 = 窗口的 61.2 遍；改了 122 个 part，其中别的分区 120 个
+  · part 数 62 → 122，读窗口的遍数 34.4 → 61.2
+  [符合] 遍数跟着全表 part 数近似翻倍（比值在 1.6–2.4 之间）：1
+  · 外层再加 settle_ms 的范围条件也没用：mutation 不按 WHERE 裁 part，照样每个 part 过一遍
+  · ch2 读了 12200573 行 = 窗口的 61.0 遍；改了 122 个 part，其中别的分区 120 个
+  [符合] 加了范围条件之后别的分区被改的 part 数（> 0 就是没裁掉）：1
+
+=== 三、加上 IN PARTITION ID '20260918' ===
+  · ch2 读了 200213 行 = 窗口的 1.0 遍；改了 2 个 part，其中别的分区 0 个
+  [符合] 子查询只读了约一遍窗口（遍数 < 1.5）：1
+  [符合] 别的分区被改的 part 数：0
+  [符合] 结果仍然对：当天行数：100000
+
+=== 四、轻量删除之后 system.parts 的 rows 还算着被标删的行 ===
+  · count() = 100000，system.parts sum(rows) = 100003
+  [符合] system.parts 比 count() 多出来的行（至少是这一次的 3）：1
+  [符合] 带轻量删除标记的 part 数 > 0：1
+  · 所以用方法一时不能拿 system.parts 的 sum(rows) 当核对，要用 count()；方法二换进来的 part 没有标记，两者一致
+
+=== 五、不带子查询、只写字面量键的轻量删除，不加 IN PARTITION 照样改全表每个 part ===
+  · 常见的另一种写法：先把要删的键和那份副本的 create_time 查出来，再贴成字面量去删（确定性的，不需要 allow_nondeterministic_mutations）
+  · 当时 active part 124 个；这条 DELETE 改了 124 个 part，其中别的分区 120 个
+  [符合] 改的 part 数 = 当时的全部 part 数：124
+  [符合] 删对了：晚 47 秒那份没了，早的那份还在：['2026-09-18 10:00:00.000']
+
+=== 六、两份 create_time 相同时，「按 create_time 删较晚那份」会两份一起删掉 ===
+  [符合] 这个键还剩几行（两份都被删了）：0
+  · 同一秒写进来的两份（DateTime 精度到秒时很常见）用 create_time 分不开，只能靠 _part/_part_offset 或整分区重写

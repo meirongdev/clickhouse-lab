@@ -17,6 +17,7 @@ services:
     volumes:
       - ./cfg/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
       - ./cfg/macros-ch1.xml:/etc/clickhouse-server/config.d/macros.xml:ro
+      - ./cfg/keeper_map.xml:/etc/clickhouse-server/config.d/keeper_map.xml:ro
     ports: ["18123:8123"]
   ch2:
     <<: *node
@@ -25,6 +26,7 @@ services:
     volumes:
       - ./cfg/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
       - ./cfg/macros-ch2.xml:/etc/clickhouse-server/config.d/macros.xml:ro
+      - ./cfg/keeper_map.xml:/etc/clickhouse-server/config.d/keeper_map.xml:ro
     ports: ["18124:8123"]
   ch3:
     <<: *node
@@ -33,4 +35,5 @@ services:
     volumes:
       - ./cfg/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
       - ./cfg/macros-ch3.xml:/etc/clickhouse-server/config.d/macros.xml:ro
+      - ./cfg/keeper_map.xml:/etc/clickhouse-server/config.d/keeper_map.xml:ro
     ports: ["18125:8123"]

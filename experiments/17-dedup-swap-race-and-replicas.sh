@@ -17,6 +17,20 @@
 # 生产 Aiven 是 Replicated 库，DDL 自动到每个节点；lab 是 Atomic 库，DDL 加 ON CLUSTER default 模拟。
 # 方案第 1、2 步原文执行不通（实验 16），这里沿用实验 16 的最小修正：LIKE 换成 AS，
 # 第 2 步加 prefer_column_name_to_alias = 1。
+#
+# 参考（方案设计依据。源码链接钉在 tag 上，行号只对那个 tag 成立；文档链接是当前版本的文档，和 25.3 有出入时以源码和实测为准）：
+#   - REPLACE PARTITION（文档说的原子性是单个副本内的）
+#     https://clickhouse.com/docs/reference/statements/alter/partition#replace-partition
+#   - alter_sync 默认 1：发起的那条语句只等自己这个副本执行完（C）
+#     https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Core/Settings.cpp#L746-L753
+#   - 落后的副本稍后执行 REPLACE_RANGE；源表已经删了就去别的副本拉（C）
+#     https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Storages/StorageReplicatedMergeTree.cpp#L2852-L2858
+#   - system.replication_queue 里的 REPLACE_RANGE
+#     https://clickhouse.com/docs/reference/system-tables/replication_queue#columns
+#   - SYSTEM STOP FETCHES / STOP REPLICATION QUEUES
+#     https://clickhouse.com/docs/reference/statements/system#stop-fetches
+#   - 被去重拦下的插入也记 NewPart（error = 389），事后检查要加 error = 0（A）
+#     https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Storages/MergeTree/ReplicatedMergeTreeSink.cpp#L493-L502
 set -uo pipefail
 source "$(dirname "$0")/../lib.sh"
 require_cluster
@@ -103,14 +117,15 @@ for n in 1 2 3; do qn $n "SYSTEM FLUSH LOGS" >/dev/null; done
 note "事后能查到的痕迹：快照之后这个分区的 NewPart（只有写入的那个副本记 NewPart，见实验 03）"
 q1 "SELECT hostName() AS host, event_type, part_name, rows FROM clusterAllReplicas('default', system.part_log)
     WHERE database = currentDatabase() AND table = 'ev17a' AND partition_id = '$PID'
-      AND event_type = 'NewPart' AND event_time_microseconds >= '$T_SNAP' AND event_time_microseconds < '$T_SWAP'
+      AND event_type = 'NewPart' AND error = 0 AND event_time_microseconds >= '$T_SNAP' AND event_time_microseconds < '$T_SWAP'
     ORDER BY host FORMAT TSVWithNames"
 expect "快照之后这个分区的 NewPart 行数合计" \
   "$(q1 "SELECT sum(rows) FROM clusterAllReplicas('default', system.part_log)
          WHERE database = currentDatabase() AND table = 'ev17a' AND partition_id = '$PID'
-           AND event_type = 'NewPart' AND event_time_microseconds >= '$T_SNAP' AND event_time_microseconds < '$T_SWAP'")" "50"
+           AND event_type = 'NewPart' AND error = 0 AND event_time_microseconds >= '$T_SNAP' AND event_time_microseconds < '$T_SWAP'")" "50"
 note "能提前拦下的那条：换分区前一刻再数一次当天行数，必须等于建临时表时的数（这次是 $((N + D + 50)) ≠ $((N + D))）"
 note "能事后发现的那条：上面这个 part_log 查询，换完立刻跑，非 0 就是有写入被抹掉了"
+note "（error = 0 那个条件不能少：被块级去重拦下的重投也会记一行 NewPart，只是 error = 389，见实验 03）"
 
 section "B、建临时表时连到的副本落后（少一个 part）"
 mk_load ev17b

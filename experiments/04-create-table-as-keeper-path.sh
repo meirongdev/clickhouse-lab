@@ -8,6 +8,16 @@
 # 路径里带 {uuid} 的那种，克隆出来是另一个路径，也不共用。
 # 两个分支都不会静默出事，但跑 runbook 前查一眼 system.replicas.zookeeper_path 仍然值得，
 # 因为它让你在建表之前就知道会撞。
+#
+# 参考（方案设计依据。源码链接钉在 tag 上，行号只对那个 tag 成立；文档链接是当前版本的文档，和 25.3 有出入时以源码和实测为准）：
+#   - CREATE TABLE … AS 不写引擎就沿用原表的引擎定义（连同字面量路径）
+#     https://clickhouse.com/docs/reference/statements/create/table#with-a-schema-similar-to-other-table
+#   - 同路径同副本名：当场报 REPLICA_ALREADY_EXISTS（实验里那句报错原文）
+#     https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Storages/StorageReplicatedMergeTree.cpp#L1240-L1243
+#   - {uuid} 展开成新表自己的 UUID
+#     https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Common/Macros.cpp#L108-L119
+#   - Atomic 库里显式写 Keeper 路径时建议用 {uuid}
+#     https://clickhouse.com/docs/reference/engines/database-engines/atomic#replicatedmergetree-in-atomic-database
 set -uo pipefail
 source "$(dirname "$0")/../lib.sh"
 require_cluster
@@ -31,7 +41,7 @@ case "$out" in
 esac
 
 section "分支二：原表路径里带 {uuid}"
-note "{uuid} 宏只在 ON CLUSTER + Atomic 库下可用，这一段走 ON CLUSTER"
+note "{uuid} 展开成表自己的 UUID。不加 ON CLUSTER 时每个副本各生成一个 UUID、路径各不相同，就复制不到一起了，所以这一段走 ON CLUSTER"
 q1 "DROP TABLE IF EXISTS uuid_src ON CLUSTER default SYNC" >/dev/null
 q1 "DROP TABLE IF EXISTS uuid_clone ON CLUSTER default SYNC" >/dev/null
 q1 "CREATE TABLE uuid_src ON CLUSTER default (id UInt32) ENGINE = ReplicatedMergeTree('/ch/tables/{uuid}/uuid_src','{replica}') ORDER BY id" >/dev/null

@@ -6,8 +6,21 @@
 #   另外：primary/partition key 上的列不支持更新；IN PARTITION 是安全装置。
 #
 # hardlink 用 stat 的链接数看（1 = 新写的文件，2 = 和旧 part 共用同一个 inode）。
-# 这是唯一一个必须跑在 docker 宿主机上的实验：要进容器 stat 文件。容器名取 CH1_CONTAINER
+# Wide 和 Compact 两种格式都真跑一次 mutation：Compact 那一半以前只建了 part、没改过它，
+# 「Compact 要整个重写」那句其实没验过。
+# 要进容器 stat 文件，必须跑在 docker 宿主机上（同类的还有实验 12、13、20）。容器名取 CH1_CONTAINER
 # （默认 ch1），它必须和 CH1 指的是同一个节点，否则量的是另一台机器上的文件。
+#
+# 参考（方案设计依据。源码链接钉在 tag 上，行号只对那个 tag 成立；文档链接是当前版本的文档，和 25.3 有出入时以源码和实测为准）：
+#   - 键列（分区键、排序键等）不能 UPDATE
+#     https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Interpreters/MutationsInterpreter.cpp#L460-L500
+#   - 非 Wide 的 part 走「改写全部列」，Wide 只改涉及的列、其余硬链接
+#     https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Storages/MergeTree/MutateTask.cpp#L2416-L2501
+#   - Wide / Compact 两种存储格式；25.3 的 min_bytes_for_wide_part 默认 10 MiB
+#     https://clickhouse.com/docs/reference/engines/table-engines/mergetree-family/mergetree#mergetree-data-storage
+#     https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Storages/MergeTree/MergeTreeSettings.cpp#L58-L59
+#   - IN PARTITION 把 mutation 限制在一个分区
+#     https://clickhouse.com/docs/reference/statements/alter/partition#how-to-set-partition-expression
 set -uo pipefail
 source "$(dirname "$0")/../lib.sh"
 require_cluster
@@ -71,6 +84,19 @@ expect "改掉的列 placed_at.bin（1 = 新写的）"        "$(links "$NEW""pl
 section "p=2 没写 IN PARTITION 就不会被碰"
 expect "p=2 里 placed_at 仍是 0 的行数" "$(q1 "SELECT countIf(placed_at = 0) FROM mut WHERE p = 2")" "10"
 expect "p=1 里 placed_at 仍是 0 的行数" "$(q1 "SELECT countIf(placed_at = 0) FROM mut WHERE p = 1")" "0"
+
+section "Compact part 上跑同一种列级 mutation：所有列在一个 data.bin 里，只能整个重写"
+OLD2=$(part_path mut 2)
+note "改之前 p=2 的 part：$OLD2，里面的文件：$(docker exec "$CH1_CONTAINER" ls "$OLD2" | tr '\n' ' ')"
+q1 "ALTER TABLE mut UPDATE placed_at = settled_at IN PARTITION 2 WHERE placed_at = 0" >/dev/null
+wait_mutation mut 60 || FAILED=1
+NEW2=$(part_path mut 2)
+note "改之后 p=2 的 part：$NEW2"
+expect "新 part 仍是 Compact" "$(part_type 2)" "Compact"
+expect "Compact 的 data.bin（1 = 整个新写，没有可以 hardlink 的单列文件）" "$(links "$NEW2""data.bin")" "1"
+expect "p=2 里 placed_at 仍是 0 的行数" "$(q1 "SELECT countIf(placed_at = 0) FROM mut WHERE p = 2")" "0"
+note "所以「mutation 只重写被改的列」只对 Wide part 成立：Compact part 改一列，所有列的数据都重写一遍。"
+note "Compact 只出现在小 part 上（默认 min_bytes_for_wide_part = 10 MiB 以下），重写的绝对量不大，但比例是 100%。"
 
 section "primary / partition key 上的列不支持更新"
 for c in "UPDATE settled_at = settled_at + 1" "UPDATE p = 3"; do

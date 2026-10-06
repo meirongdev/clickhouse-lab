@@ -1,0 +1,47 @@
+# 跑于 2026-10-05 14:57:06 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab ca4e119+改动
+# Kafka Connect 7.7.0-ccs | clickhouse-kafka-connect v1.3.9
+
+=== A、errors.tolerance=none（生产默认）：一条坏记录让 task 停下，之后的数据全卡在 Kafka 里 ===
+  · task 起来用了 2s
+  · 16 条正常记录写进去用了 0s
+  [符合] 16 条正常记录都到了：16
+  · 它们落在 6 个分区上（8 个分区的 topic，key 不同就散开）
+  · 坏记录进来之后约 2s，task 变成 FAILED
+  [符合] task 状态：FAILED
+  task 的报错（截取）：org.apache.kafka.connect.errors.ConnectException: Exiting WorkerSinkTask due to unrecoverable exception.\n\tat org.apache.kafka.connect.runtime.WorkerSinkTask.deliverMessages(WorkerSinkTask.java:632)\
+  [符合] task 停了之后再来的 8 条正常记录，15 秒后一条都没进 ClickHouse：0
+  · 这时消费组在这个 topic 上的 lag 合计：9（坏记录 1 条 + 后来的 8 条，再加上和坏记录同批、没来得及提交的那几条）
+  [符合] lag 至少是 9（数据都还在 Kafka 里，没丢，只是没进来，1 = 是）：1
+  [符合] 重启 task 之后又是 FAILED（坏记录还在原位，每次都撞上它）：FAILED
+  · 默认配置下坏记录是毒丸：不跳过它，后面所有分区都不会再前进。数据在 Kafka 里，「少了」的信号是 task 状态和 lag
+
+=== B、errors.tolerance=all + DLQ：task 不停，坏记录所在的那一整批都进 DLQ ===
+  · task 起来用了 2s
+  · 预热记录写进去用了 0s
+  · 先暂停 connector，把下面这一批攒在 Kafka 里，恢复之后它们会在同一次 poll 里被取走、按分区分批写
+  · 这一批 11 条，坏记录在分区 2，和它同分区的（含它自己）有 3 条
+  [符合] task 仍是 RUNNING（没停）：RUNNING
+  [符合] 进 DLQ 的条数 = 坏记录所在分区这一批的全部条数：3
+  [符合] 那两条同分区的好记录也在 DLQ 里：2
+  [符合] ClickHouse 里这一批的行数 = 其余分区的条数：8
+  [符合] 同分区的两条好记录没进 ClickHouse：0
+  · DLQ 记录的 header：__connect.errors.stage:TASK_PUT，
+  ·   __connect.errors.exception.message:Topic: [lab09_dlq], Partition: [2], MinOffset: [0], MaxOffset: [2], 
+  ·   stage 是 TASK_PUT（写库那一步，不是转换），报错信息里记的是整批的 offset 区间，不是哪一条坏了
+  · 好记录被一起送走，是因为 connector 按 topic-partition 分批写，一批写失败就把整批交给 DLQ，
+  · 它不会把坏记录挑出来重试其余的。生产上 8 个分区、每批几十到几百条：一条坏记录带走的是它那个分区那一批
+
+=== C、字段缺失或者字段名对不上：不报错，补默认值 ===
+  [符合] 字段名写错（vall）的那条照样写进来了：1
+  [符合] val 列是默认值 0，多出来的 vall 被丢掉：0
+  [符合] DLQ 里没有它（没有任何报错）：0
+  · 上游改了字段名、少发一个字段，都是这个形状：行数对得上，值不对。对账要连值一起对
+
+=== D、errors.tolerance=all 但没配 DLQ：失败的那一批静默消失 ===
+  · task 起来用了 2s
+  [符合] task 仍是 RUNNING：RUNNING
+  [符合] 同一批的 3 条（两条好的 + 一条坏的）都没进 ClickHouse：0
+  [符合] 后面来的那条照常写进来了：1
+  [符合] 消费组的 offset 已经越过了那一批（提交到 5 = 预热 1 + 这一批 3 + 后来 1）：5
+  · 没配 DLQ 时 connector 用的是一个什么都不做的 reporter：失败的批次被吞掉，task 状态、lag 都看不出来。
+  · 这一批只剩源 topic 里那一份，过了 Kafka 的保留期就没了。errors.tolerance=all 一定要和 DLQ 一起配

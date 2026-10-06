@@ -1,46 +1,72 @@
-# 跑于 2026-09-17 21:27:14 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab b6b783c
+# 跑于 2026-10-05 02:46:05 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab ca4e119+改动 | SLOW=1
+name	value
+do_not_merge_across_partitions_select_final	0
+split_intersecting_parts_ranges_into_layers_final	1
+split_parts_ranges_into_intersecting_and_non_intersecting_final	1
 
-=== 造数据：10000000 行 + 5 次重投（每次 100000 行，逐字节相同） ===
+=== 造数据：两张表各 10000000 行 + 5 次重投（每次 100000 行，逐字节相同） ===
+  · rmt：重投的都是前 100000 个键，和生产上「重投的是刚写的那一批」同形，重叠集中在一小段排序键上
+  · rmt_spread：每次重投的 100000 行均匀撒在全部 10000000 个键上，每个 part 都和别的 part 处处重叠
+  · active part 数：rmt 14，rmt_spread 14
 
 === 一、正确性：重投的第二份还在表里，但 FINAL 读不到它 ===
-  [符合] 物理行数（重投的都落盘了）：10500000
-  [符合] FINAL 读出来的行数（重投被折叠掉）：10000000
+  [符合] rmt 物理行数（重投的都落盘了）：10500000
+  [符合] rmt FINAL 读出来的行数（重投被折叠掉）：10000000
+  [符合] rmt_spread 物理行数（重投的都落盘了）：10500000
+  [符合] rmt_spread FINAL 读出来的行数（重投被折叠掉）：10000000
   · 这就是这条建议的全部意义：重投照样写进来，但它变成「多一份待合并的行」，
   · 不再是对账口径上的差异。块级去重窗口过没过期，和这个结论无关。
   · 注意上面那个物理行数是在「merge 已停」的前提下才稳定的：放开 merge 之后它会自己往下掉，
   · 掉到哪一步、什么时候掉完，都不由你定——所以对账口径要么带 FINAL，要么认这个不确定性。
 
-=== 二、代价随查询形状变，不是一个固定倍数 ===
-  count()                                        2 ms  1.00 行  4.02 MiB
-  count() FINAL                                  26 ms  10.80 million 行  12.31 MiB
-  范围查询（走排序键）                 8 ms  344.06 thousand 行  4.11 MiB
-  范围查询 FINAL                             16 ms  491.52 thousand 行  11.05 MiB
+=== 二、代价随查询形状变，不是一个固定倍数（rmt） ===
+  count()                      1 ms  1.00 行  4.02 MiB
+  count() FINAL                16 ms  10.80 million 行  12.31 MiB
+  范围查询（走排序键） 5 ms  344.06 thousand 行  4.11 MiB
+  范围查询 FINAL           12 ms  491.52 thousand 行  11.05 MiB
   [符合] 不带 FINAL 的 count() 只读元数据（read_rows = 1）：1
   [符合] 带 FINAL 的 count() 得真扫一遍（1 = read_rows 不小于表行数）：1
-  · 最贵的是 count()：不带 FINAL 走元数据快捷路径，带上就得把重叠的 part 现场合并一遍。
-  · 走排序键的范围查询要便宜得多——它只需要合并被扫到的那几个 granule。
-  · 所以「FINAL 贵不贵」要看查询形状，拿 count() 的倍数去吓唬人是不对的。
+  · 范围查询带 FINAL 是不带的 2.4 倍
+  · 最贵的是 count()：不带 FINAL 走元数据快捷路径，带上就得把每个 part 读一遍。走排序键的范围查询
+  · 只碰被扫到的那几个 granule，额外开销是同一个量级——「FINAL 贵不贵」要看查询形状，拿 count() 的倍数吓人是不对的。
 
-=== 三、代价主要来自「有多少个重叠的 part」，不是行数 ===
-  停掉 merge 猛插之后    29 个 part → count() FINAL 中位 36 ms
-  OPTIMIZE FINAL 之后        1 个 part → count() FINAL 中位 5 ms
-  · 行数几乎没变，耗时差出好几倍：FINAL 的开销跟着「要现场合并多少个重叠 part」走。
-  · 推论有两条：merge 跟不上的时候 FINAL 会连带变慢；而 merge 一旦追上，它自己就便宜下来了。
+=== 三、代价跟着「落在重叠区间里的行」走，而不只是 part 数 ===
+  · 再往 rmt 里堆 15 个集中在前 20000 个键上的小 part（同样每个给不同的 token）
+  rmt（重叠集中在前 10 万个键）  14 个 part → count() FINAL 中位 17 ms
+  rmt 再堆 15 个集中的小 part  29 个 part → count() FINAL 中位 17 ms
+  rmt_spread（重叠铺满全部键）  14 个 part → count() FINAL 中位 52 ms
+  [符合] 同样的 part 数，重叠铺满的比重叠集中的贵（1 = 是）：1
+  · 看上面三行：重叠集中时，part 从 14 个堆到 29 个，耗时基本不跟着涨——绝大部分区间不和别的 part
+  · 相交，直接读；同样 14 个 part，重叠铺满时每一段都要归并，耗时成倍上去。所以光数 part 不够，
+  · 要看新写进来的 part 和旧 part 在排序键上交叠得多广。按时间排序、只重投最近一批的表，重叠天然是集中的。
 
-=== 四、OPTIMIZE FINAL 之后，重复行是真的被物理去掉了 ===
-  [符合] 不带 FINAL 也只剩去重后的行数：10000000
-  [符合] 带 FINAL 读到的还是同一个数：10000000
-  · 所以 FINAL 不是「永远要付的税」，它付的是「后台还没合并到」的那部分差值。
+=== 四、和「不用 FINAL、自己在查询里去重」比（两张表都还有重叠 part 的时候） ===
+  rmt          FINAL                  24 ms  17.15 MiB
+  rmt          自己 GROUP BY 去重 755 ms  1.19 GiB
+  rmt          自己 LIMIT 1 BY 去重 1178 ms  1.15 GiB
+  rmt_spread   FINAL                  60 ms  74.45 MiB
+  rmt_spread   自己 GROUP BY 去重 207 ms  974.53 MiB
+  rmt_spread   自己 LIMIT 1 BY 去重 1034 ms  1.16 GiB
+  · rmt：GROUP BY 去重的耗时是 FINAL 的 31 倍，内存是 71 倍
+  [符合] rmt：FINAL 比自己 GROUP BY 去重省内存（差一个数量级以上，1 = 是）：1
+  [符合] rmt：FINAL 比自己 GROUP BY 去重快（1 = 是）：1
+  · rmt_spread：GROUP BY 去重的耗时是 FINAL 的 3 倍，内存是 13 倍
+  [符合] rmt_spread：FINAL 比自己 GROUP BY 去重省内存（差一个数量级以上，1 = 是）：1
+  [符合] rmt_spread：FINAL 比自己 GROUP BY 去重快（1 = 是）：1
+  · FINAL 能利用「每个 part 本来就按排序键有序」这件事，做的是流式归并；
+  · 自己写 GROUP BY / LIMIT 1 BY 等于把这个前提丢掉，要在内存里重新攒一遍哈希表或者重新排序。
+  · 所以「FINAL 太贵，别用」得分清跟谁比：跟「不去重」比它确实贵，跟「自己去重」比它便宜得多；
+  · 便宜多少取决于重叠有多广，上面两张表给的是两头。真正的替代品是物化视图，不是手写去重。
 
-=== 五、和「不用 FINAL、自己在查询里去重」比 ===
-  FINAL                              4 ms  4.07 MiB
-  自己 GROUP BY 去重             846 ms  1.23 GiB
-  自己 LIMIT 1 BY 去重           1976 ms  1.13 GiB
-  [符合] FINAL 比自己 GROUP BY 去重省内存（1 = 是，差一个数量级以上）：1
-  · FINAL 能利用「每个 part 本来就按排序键有序」这件事，做的是归并；
-  · 自己写 GROUP BY / LIMIT 1 BY 等于把这个前提丢掉，要在内存里重新攒一遍哈希表。
-  · 所以常见的那句「FINAL 太贵，别用」得分清跟谁比：跟「不去重」比确实贵，
-  · 跟「自己去重」比它便宜得多。真正的替代品是物化视图，不是手写去重。
+=== 五、OPTIMIZE FINAL 之后：重复行被物理去掉，FINAL 也没有东西要归并了 ===
+  [符合] rmt 合并之后的 part 数：1
+  [符合] rmt 不带 FINAL 也只剩去重后的行数：10000000
+  rmt          1 个 part → count() FINAL 中位 4 ms
+  [符合] rmt_spread 合并之后的 part 数：1
+  [符合] rmt_spread 不带 FINAL 也只剩去重后的行数：10000000
+  rmt_spread   1 个 part → count() FINAL 中位 4 ms
+  · 只剩 1 个 part 时没有任何重叠区间，FINAL 退化成普通读取。所以 FINAL 不是「永远要付的税」，
+  · 它付的是「后台还没合并到、并且互相重叠」的那部分。
 
 === 不能从这里外推的 ===
   · 以上全部是 10000000 行、这台机器上的数。生产那张表是单日分区两亿行、30 GiB，

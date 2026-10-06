@@ -1,4 +1,4 @@
-# 跑于 2026-09-17 21:07:29 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 2832552
+# 跑于 2026-10-05 02:31:27 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab ca4e119+改动 | SLOW=1
 
 === 分支一：原表路径是字面量 ===
   · 原表路径：/ch/tables/01/lit_src
@@ -8,14 +8,14 @@
   [符合] 当场报错，没有悄悄共用复制元数据
 
 === 分支二：原表路径里带 {uuid} ===
-  · {uuid} 宏只在 ON CLUSTER + Atomic 库下可用，这一段走 ON CLUSTER
+  · {uuid} 展开成表自己的 UUID。不加 ON CLUSTER 时每个副本各生成一个 UUID、路径各不相同，就复制不到一起了，所以这一段走 ON CLUSTER
 table	zookeeper_path
-uuid_clone	/ch/tables/7cc1aa11-5e73-426d-97b4-d706a46d1cb0/uuid_src
-uuid_src	/ch/tables/b00426bb-189c-4e9c-b4a9-6775a4e4ba86/uuid_src
+uuid_clone	/ch/tables/1372d6d2-2553-48be-8746-4984e076ebd9/uuid_src
+uuid_src	/ch/tables/581d6328-4748-415a-9435-a2a81e01b208/uuid_src
   [符合] 两张表的 zookeeper_path 各不相同：2
 
 === runbook 跑之前该做的那条检查 ===
 table	zookeeper_path
 lit_src	/ch/tables/01/lit_src
-uuid_clone	/ch/tables/7cc1aa11-5e73-426d-97b4-d706a46d1cb0/uuid_src
-uuid_src	/ch/tables/b00426bb-189c-4e9c-b4a9-6775a4e4ba86/uuid_src
+uuid_clone	/ch/tables/1372d6d2-2553-48be-8746-4984e076ebd9/uuid_src
+uuid_src	/ch/tables/581d6328-4748-415a-9435-a2a81e01b208/uuid_src

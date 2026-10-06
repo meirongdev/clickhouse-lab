@@ -22,6 +22,21 @@
 #
 # 生产上 Aiven 用的是 Replicated 库，DDL 自动传到每个节点；lab 是 Atomic 库，所以 DDL 一律加
 # ON CLUSTER default 来模拟。方案里的 DML 照原样只打 ch1。
+#
+# 参考（方案设计依据。源码链接钉在 tag 上，行号只对那个 tag 成立；文档链接是当前版本的文档，和 25.3 有出入时以源码和实测为准）：
+#   - CREATE TABLE 的几种写法（AS / CLONE AS / AS SELECT），没有 LIKE
+#     https://clickhouse.com/docs/reference/statements/create/table#with-a-schema-similar-to-other-table
+#   - 别名是全局的，会顶替同名列；prefer_column_name_to_alias 关掉这个行为（二）
+#     https://clickhouse.com/docs/reference/syntax#notes-on-usage
+#     https://clickhouse.com/docs/reference/settings/session-settings/prefer#prefer_column_name_to_alias
+#   - INSERT … SELECT 按位置对列，名字不起作用（三）
+#     https://clickhouse.com/docs/reference/statements/insert-into#inserting-the-results-of-select
+#   - argMin 跳过 NULL，arg 和 min 可以来自不同的行（四）
+#     https://clickhouse.com/docs/reference/functions/aggregate-functions/argMin#argMin
+#   - NULL 的哈希是 NULL，要包一层 tuple（四）
+#     https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/docs/en/sql-reference/functions/hash-functions.md#L18
+#   - EXCEPT ALL 的实现：左边的行只要在右边出现过就去掉，不按多重集相减
+#     https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Processors/Transforms/IntersectOrExceptTransform.cpp#L111-L120
 set -uo pipefail
 source "$(dirname "$0")/../lib.sh"
 require_cluster

@@ -1,10 +1,10 @@
-# 跑于 2026-09-17 21:08:01 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 2832552
+# 跑于 2026-10-05 02:37:59 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab ca4e119+改动 | SLOW=1
 name	value
 database_atomic_delay_before_drop_table_sec	480
 name	engine
 default	Atomic
 
-=== 一、DETACH / ATTACH PARTITION 能找回什么 ===
+=== 一、DETACH / ATTACH PARTITION：摘下来再挂回去 ===
   [符合] 起始行数：3
   [符合] DETACH 之后表里只剩另一个分区：1
   · 数据没被删，只是摘下来了，在 system.detached_parts 里看得到：
@@ -12,24 +12,26 @@ partition_id	reason
 20260730	
   [符合] detached part 数：1
   [符合] ATTACH 之后行数原样回来：3
-  · 结论：DETACH 是可逆的，原地可救，不用碰备份。DROP PARTITION 不是。
+  · DETACH 是可逆的，原地可救，不用碰备份。但它不是删除，真正的误删是下面那种
 
-=== 二、FREEZE 之后 shadow/ 里躺着什么 ===
+=== 二、FREEZE 备份，然后真的误删一个分区（DROP PARTITION），再从备份还原 ===
   · shadow/lab_recovery_probe 下的目录结构（只列到 part 一层）：
-    /var/lib/clickhouse/shadow/lab_recovery_probe/store/0c8/0c866b58-6508-49f3-9b39-4188d62ff41f
-    /var/lib/clickhouse/shadow/lab_recovery_probe/store/0c8/0c866b58-6508-49f3-9b39-4188d62ff41f/20260730_2_2_0
-    /var/lib/clickhouse/shadow/lab_recovery_probe/store/0c8/0c866b58-6508-49f3-9b39-4188d62ff41f/20260730_2_2_0/primary.cidx
-    /var/lib/clickhouse/shadow/lab_recovery_probe/store/0c8/0c866b58-6508-49f3-9b39-4188d62ff41f/20260730_2_2_0/data.bin
-    /var/lib/clickhouse/shadow/lab_recovery_probe/store/0c8/0c866b58-6508-49f3-9b39-4188d62ff41f/20260730_2_2_0/data.cmrk3
-    /var/lib/clickhouse/shadow/lab_recovery_probe/store/0c8/0c866b58-6508-49f3-9b39-4188d62ff41f/20260730_2_2_0/partition.dat
+    /var/lib/clickhouse/shadow/lab_recovery_probe/store/b7c/b7c4bca2-5b86-4aa1-9963-1b07e58540bf/20260730_2_2_0
+    /var/lib/clickhouse/shadow/lab_recovery_probe/store/b7c/b7c4bca2-5b86-4aa1-9963-1b07e58540bf/20260731_0_0_0
   [符合] shadow/ 里冻住的 part 数（表里有 2 个分区）：2
-  · 冻的是 hardlink 不是拷贝，所以瞬间完成、当时不占额外空间；
-  · 但它和原 part 共用 inode，原 part 被 merge 掉之后这份才真正占住磁盘。
-  · 链接数验证：2 （>1 = 和原 part 共用 inode）
-  · 要恢复得自己把目录搬进 detached/ 再 ATTACH，FREEZE 本身不提供还原命令。
+  [符合] 冻住的文件和原 part 共用 inode（链接数 > 1，1 = 是）：1
+  · 冻的是 hardlink 不是拷贝：瞬间完成、当时不占额外空间；原 part 被 merge 掉之后，这份才真正占住磁盘。
+  [符合] FREEZE 只在执行它的副本上冻：ch2 上没有这个 shadow/ 目录：没有
+  · 所以每个副本要各自冻，或者只冻一个副本、靠下面这种「ATTACH 之后别的副本来拉」把数据带回去
+  [符合] DROP PARTITION 之后三个副本都只剩另一个分区（ch1,ch2,ch3）：1,1,1
+  [符合] DROP PARTITION 不留 detached，没有可以原地挂回去的东西：0
+  · 还原：把 shadow/ 里那个分区的 part 目录拷进表的 detached/，再 ATTACH PARTITION
+  · 从拷目录到三个副本都追平，用了约 0s（3 行的玩具表，这个数只说明步骤走得通，不代表生产耗时）
+  [符合] 还原之后三个副本的行数（ch1,ch2,ch3）：3,3,3
+  · 只在 ch1 上 ATTACH，另两个副本是从 ch1 拉回去的：一份冻结备份够整个副本组还原
 
-=== 三、DROP 之后那 480 秒里能不能救回来（Atomic 的延迟删除） ===
-  [符合] DROP 之后 system.tables 里没有了：0
+=== 三、DROP TABLE（不加 SYNC）之后，延迟期内 UNDROP ===
+  [符合] DROP 之后 ch1 的 system.tables 里没有了：0
   · 但它还在延迟删除队列里，system.dropped_tables 看得到：
 table	engine
 recov	ReplicatedMergeTree
@@ -44,9 +46,48 @@ recov	ReplicatedMergeTree
   · 所以那条「临时表开头用 DROP … SYNC」（实验 07）是有代价的：它同时放弃了后悔药。
   · 对随手建的临时表这是对的；对真表，先确认不需要 UNDROP 再加 SYNC。
 
-=== 五、延迟期满之后，后悔药也到期 ===
-  · 实测过一次（2026-09-17，delay = 480 秒）：DROP 之后 t=451s 时 Keeper 里的副本和
-  · system.dropped_tables 都还在，t=481s 两者同时归零，之后 UNDROP 报 UNKNOWN_TABLE。
-  · 也就是说延迟期满那一刻，Keeper 残留和后悔药是同时消失的，不是两件事。
-  · 这一段默认跳过——等满 480 秒会给 run-all 多加 8 分钟。要自己再验一次：
-  ·   SLOW=1 bash experiments/13-drop-recovery-window.sh
+=== 五、延迟期内先 SYSTEM DROP REPLICA 清 Keeper 残留，再 UNDROP ===
+  [符合] DROP 之后 Keeper 里的副本还在：1
+  [符合] SYSTEM DROP REPLICA 之后整条 Keeper 路径都没了（最后一个副本）：0
+  [符合] UNDROP 照样成功（空 = 成功）：
+  [符合] 数据还在（本地 part 没动）：2
+  [符合] 但表回来是只读的：1
+  这时候写入：Code: 242. DB::Exception: Table is in readonly mode since table metadata was not found in zookeeper: replica_path=/ch/tables/01/undrop_after_drop_repl
+  [符合] SYSTEM RESTORE REPLICA 之后可以写了：
+  [符合] 数据一行没丢：3
+  · 所以延迟期内的两个动作有先后：想救表就先 UNDROP；先清了 Keeper 残留再 UNDROP，
+  · 表会以只读状态回来，还要 RESTORE REPLICA 按本地 part 把 Keeper 里的元数据重建一遍
+
+=== 六、超过大小阈值的 DROP 被拒：阈值可以只对这一条语句放开 ===
+name	value
+max_partition_size_to_drop	50000000000
+max_table_size_to_drop	50000000000
+name	value
+max_partition_size_to_drop	50000000000
+max_table_size_to_drop	50000000000
+  · 服务端设置和查询级设置里都有这两项，默认都是 50000000000 字节（50 GB）
+  · 把阈值压到 1 字节，模拟「表比阈值大」：
+  DROP PARTITION：Code: 359. DB::Exception: Table or Partition in default.droplimit was not dropped.
+  [符合] 被拒
+  DROP TABLE：Code: 359. DB::Exception: Table or Partition in default.droplimit was not dropped.
+  [符合] 被拒
+  [符合] 表还在：1
+  [符合] 只对这一条放开（max_partition_size_to_drop = 0 即不限）：DROP PARTITION 成功：
+  · 不用改服务端配置、不用放 force_drop_table 标记文件。超线被拒时先确认删的是想删的东西，再这样放开
+
+=== 七、延迟期满之后，后悔药也到期 ===
+  · 每 10 秒同时看 Keeper 里的副本数和 system.dropped_tables 里的条目数，记两者各自归零的时刻
+  t=0s    Keeper 里的副本=1  dropped_tables=1
+  t=61s   Keeper 里的副本=1  dropped_tables=1
+  t=121s  Keeper 里的副本=1  dropped_tables=1
+  t=182s  Keeper 里的副本=1  dropped_tables=1
+  t=242s  Keeper 里的副本=1  dropped_tables=1
+  t=303s  Keeper 里的副本=1  dropped_tables=1
+  t=363s  Keeper 里的副本=1  dropped_tables=1
+  t=424s  Keeper 里的副本=1  dropped_tables=1
+  t=484s  Keeper 里的副本=0  dropped_tables=0
+  · Keeper 副本在 t=484s 消失，dropped_tables 条目在 t=484s 消失（10 秒粒度）
+  [符合] 两者都撑过了延迟期的九成才消失（1 = 是）：1
+  [符合] 两者在同一个 10 秒轮询里消失（1 = 是）：1
+  [符合] 期满之后救不回来了：Code: 60. DB::Exception: Table default.expiry_probe is being dropped, has been dropped, or
+  · Keeper 残留和后悔药是同一个计时器的两面：看到残留副本还在，就说明还来得及 UNDROP

@@ -6,6 +6,12 @@
 #
 # 四种写法各试一遍，看服务端到底接受哪些。用 OPTIMIZE 试，它和 REPLACE PARTITION
 # 走同一套分区子句解析，但不改数据。
+#
+# 参考（方案设计依据。源码链接钉在 tag 上，行号只对那个 tag 成立；文档链接是当前版本的文档，和 25.3 有出入时以源码和实测为准）：
+#   - 分区表达式的写法和引号规则（同样适用于 OPTIMIZE）
+#     https://clickhouse.com/docs/reference/statements/alter/partition#how-to-set-partition-expression
+#   - PARTITION ID 后面只接受字符串字面量（实验里那句报错的来源）
+#     https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Parsers/ParserPartition.cpp#L25-L29
 set -uo pipefail
 source "$(dirname "$0")/../lib.sh"
 require_cluster

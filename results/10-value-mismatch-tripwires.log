@@ -1,4 +1,4 @@
-# 跑于 2026-09-17 21:07:39 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 2832552
+# 跑于 2026-10-05 02:34:25 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab ca4e119+改动 | SLOW=1
 
 === 服务端时区（下面那两张表的对照基准） ===
 server_tz
@@ -49,6 +49,6 @@ k	v
   · 但这不是 ANY JOIN 的性质，是一个设置的当前取值：join_any_take_last_row 直接翻转它
   [符合] join_any_take_last_row = 0（默认）取先出现的那行：v1,v1,v1
   [符合] join_any_take_last_row = 1 取后出现的那行：v2,v2,v2
-  · 官方 JOIN 语句页没有写 ANY 保留哪一行（已核，2026-09-17 读的那一页只列了 ANY 的语法
-  · 和 join_any_take_last_row 这个设置，没有措辞承诺是第一行）。所以别在文档里写死
-  · 「ANY JOIN 取第一行」——它连默认值都是可配的。要确定性就自己 LIMIT 1 BY 加排序列。
+  · 25.3 源码里这个设置的说明写的是「只对 Join 引擎表生效」，而上面这张右表是普通子查询、走的是 hash join，
+  · 照样被它翻转了：以实测为准，不以说明为准。当前版本的文档还提醒 ANY JOIN 在并行 hash join 下可能返回不确定的行。
+  · 所以别在文档里写死「ANY JOIN 取第一行」——它连默认值都是可配的。要确定性就自己 LIMIT 1 BY 加排序列。

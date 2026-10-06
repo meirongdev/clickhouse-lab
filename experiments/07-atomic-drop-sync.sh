@@ -5,6 +5,17 @@
 #
 # 两条路径用不同的表名和 Keeper 路径，免得互相污染。
 # 写这个实验时踩到的坑单独记在最后一节：SYNC 只在「它就是执行删除的那条语句」时有用。
+#
+# 参考（方案设计依据。源码链接钉在 tag 上，行号只对那个 tag 成立；文档链接是当前版本的文档，和 25.3 有出入时以源码和实测为准）：
+#   - Atomic 库的 DROP 是延迟的，SYNC 改成同步
+#     https://clickhouse.com/docs/reference/engines/database-engines/atomic#drop-detach-table
+#   - 延迟期默认 480 秒
+#     https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Core/ServerSettings.cpp#L335-L338
+#   - 延迟期满、真正 drop 的时候才删 Keeper 里的副本（所以期内同路径建表会撞）
+#     https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Interpreters/DatabaseCatalog.cpp#L1153-L1159
+#     https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Storages/StorageReplicatedMergeTree.cpp#L1388
+#   - SYSTEM DROP REPLICA 的语法（FROM ZKPATH、副本名）
+#     https://clickhouse.com/docs/reference/statements/system#drop-replica
 set -uo pipefail
 source "$(dirname "$0")/../lib.sh"
 require_cluster

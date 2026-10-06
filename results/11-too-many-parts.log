@@ -1,4 +1,4 @@
-# 跑于 2026-09-17 21:07:41 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 2832552
+# 跑于 2026-10-05 02:34:26 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab ca4e119+改动 | SLOW=1
 
 === 默认值（生产上就是这两个数在起作用） ===
 name	value
@@ -12,19 +12,19 @@ parts_to_throw_insert	3000
 === 一条一行地插，直到服务端拒绝 ===
   · 第 26 条被拒，此时单分区 active part = 25
   报错原文：
-    Code: 252. DB::Exception: Too many parts (25 with average size of 207.00 B) in table 'default.manyparts (a8ed4073-1474-49f6-a3e0-c07a7d5c7ab4)'. Merges are proc
+    Code: 252. DB::Exception: Too many parts (25 with average size of 207.00 B) in table 'default.manyparts (94312b31-d728-4ca3-8dbf-1f899c63764a)'. Merges are proc
   [符合] 报的是 TOO_MANY_PARTS
   [符合] 被拒时 active part 数已经到 parts_to_throw_insert（1 = 是）：1
 
 === 拖慢发生在报错之前，不是同时 ===
-  · DelayedInserts 计数：20 → 25
+  · DelayedInserts 计数：14 → 19
   [符合] 这一轮里确实有 INSERT 被人为拖慢过（1 = 有）：1
   · 先拖慢再报错：到 20 个 part 开始拖，到 25 个才拒绝。生产上这段拖慢期
   · 就是唯一的预警窗口，等报错了再看就晚了——巡检盯的是 part 数，不是错误率。
 
 === 这段拖慢在耗时上长什么样 ===
-  阈值之前那 8 条 INSERT 的耗时中位数：9 ms
-  最后 8 条（已经在拖慢区）：        307 ms
+  阈值之前那 8 条 INSERT 的耗时中位数：6 ms
+  最后 8 条（已经在拖慢区）：        306 ms
   · 耗时是环境相关的，只作参照；硬证据是上面那个 DelayedInserts 计数
 
 === 恢复：把 merge 放回去，part 数掉下来，写入就恢复了 ===
@@ -32,3 +32,19 @@ parts_to_throw_insert	3000
   [符合] part 数已经回到阈值以下（1 = 是）：1
   [符合] 写入恢复（空 = 成功）：
   [符合] 行数 = 成功写进去的 25 条 + 恢复后补的 1 条：26
+
+=== 二、一条 INSERT 会切成几个 part：看数据从哪来 ===
+name	value
+max_block_size	65409
+max_insert_block_size	1048449
+min_insert_block_size_bytes	268402944
+min_insert_block_size_rows	1048449
+  [符合] INSERT … SELECT 300 万行：每个 part 1111953 行 = 17 × max_block_size：1111953,1111953,776094
+  · 读取侧按 max_block_size = 65409 行一块往下吐，写入侧攒到 min_insert_block_size_rows = 1048449 才落一个 part，
+  · 1048449 / 65409 = 16.03，要攒满 17 块才够，所以是 17 × 65409 = 1111953 行一个 part
+  [符合] 客户端发 TSV 300 万行：按 max_insert_block_size = 1048449 行切：1048449,1048449,903102
+  · 客户端发 JSONEachRow 300 万行：各 part 行数 129722,1472176,1398102
+  · JSONEachRow 走并行解析，先按字节切段、再攒到 min_insert_block_size_rows，所以 part 不是整齐的 1048449 行
+  [符合] JSONEachRow 300 万行也是 3 个 part，其中 2 个不少于 min_insert_block_size_rows、1 个装余数（1 = 是）：1
+  · 装余数的那个 part 不一定最后提交，所以各 part 的先后顺序每次可能不同
+  [符合] 客户端发 3000 行一小批：1 个 part（Kafka Connect 每批每个分区就是这种）：3000

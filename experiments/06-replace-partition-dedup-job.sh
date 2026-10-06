@@ -5,6 +5,14 @@
 #   跑之前要验：每组重复的业务列哈希数是 1（否则 LIMIT 1 BY 会不报错地丢掉好的那份）。
 #
 # 这里按文章里的五条 SQL 原样跑一遍，加上那两条前置校验。
+#
+# 参考（方案设计依据。源码链接钉在 tag 上，行号只对那个 tag 成立；文档链接是当前版本的文档，和 25.3 有出入时以源码和实测为准）：
+#   - REPLACE PARTITION 的语义和前提（同分区键、排序键、主键、存储策略）
+#     https://clickhouse.com/docs/reference/statements/alter/partition#replace-partition
+#   - 两表结构不一致时拒绝执行的检查
+#     https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Storages/MergeTree/MergeTreeData.cpp#L7767-L7819
+#   - LIMIT n BY 取每组前 n 行，行的先后只有 ORDER BY 才保证
+#     https://clickhouse.com/docs/reference/statements/select/limit-by
 set -uo pipefail
 source "$(dirname "$0")/../lib.sh"
 require_cluster

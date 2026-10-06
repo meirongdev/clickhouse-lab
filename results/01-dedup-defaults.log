@@ -1,7 +1,12 @@
-# 跑于 2026-09-17 21:06:45 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 2832552
+# 跑于 2026-10-05 02:49:51 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab ca4e119+改动 | SLOW=1
 
-=== 服务端版本 ===
+=== 服务端版本和拓扑 ===
 25.3.14.14
+cluster	shard_num	replica_num	host_name	port	is_local
+default	1	1	ch1	9000	1
+default	1	2	ch2	9000	0
+default	1	3	ch3	9000	0
+  [符合] cluster default 是 1 shard × 3 replicas：1x3
 
 === 文章里那条查询的完整输出 ===
 name	value
@@ -16,8 +21,21 @@ replicated_deduplication_window_seconds_for_async_inserts	604800
   [符合] replicated_deduplication_window：1000
   [符合] replicated_deduplication_window_seconds：604800
 
-=== 裁剪线程的周期（实验 02 要用） ===
-name	value
-cleanup_delay_period	30
-cleanup_delay_period_random_add	10
-max_cleanup_delay_period	300
+=== mechanism-map 默认值表：逐项对源码 v25.3.13.19-lts 的 MergeTreeSettings.cpp ===
+  [符合] index_granularity                              :54：8192
+  [符合] max_bytes_to_merge_at_max_space_in_pool        :80：161061273600
+  [符合] max_parts_to_merge_at_once                     :98：100
+  [符合] number_of_mutations_to_delay                   :111：500
+  [符合] number_of_mutations_to_throw                   :112：1000
+  [符合] parts_to_delay_insert                          :126：1000
+  [符合] parts_to_throw_insert                          :128：3000
+  [符合] max_avg_part_size_for_too_many_parts           :130：1073741824
+  [符合] replicated_deduplication_window                :148：1000
+  [符合] replicated_deduplication_window_seconds        :149：604800
+  [符合] cleanup_delay_period                           :210：30
+  [符合] max_cleanup_delay_period                       :211：300
+  [符合] cleanup_delay_period_random_add                :212：10
+  [符合] cleanup_thread_preferred_points_per_iteration  :213：150
+  [符合] ttl_only_drop_parts                            :237：0
+  · cleanup_delay_period 在源码里的描述是「Minimum period」：裁剪线程的间隔是自适应的，
+  · 30 秒是下限、300 秒是上限，中间按上一轮清掉多少东西伸缩（实验 02）。

@@ -1,19 +1,32 @@
-# 跑于 2026-10-04 21:29:32 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 2cbfb6b
+# 跑于 2026-10-05 02:47:05 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab ca4e119+改动 | SLOW=1
 
 === 一、ATTACH PARTITION … FROM 做快照 ===
-  [符合] 快照表和原表的 v.bin 是同一个 inode（1 = 是）：1
+  [符合] 快照表和原表的 v.bin 是同一个 inode（ch1 上看，1 = 是）：1
+  [符合] 三个副本上各自也是同一个 inode（ch1,ch2,ch3；另两个副本是自己从本地原表挂的硬链接，没去拉数据）：1,1,1
   [符合] 这条语句写入的行数：0
 
 === 二、REPLACE PARTITION … FROM 临时表 ===
-  [符合] 换进来的 part 和临时表的 v.bin 是同一个 inode（1 = 是）：1
+  [符合] 换进来的 part 和临时表的 v.bin 是同一个 inode（ch1 上看，1 = 是）：1
+  [符合] 三个副本上各自也是同一个 inode（ch1,ch2,ch3）：1,1,1
   [符合] 这条语句写入的行数：0
   · 写数据的是前面那条建临时表的 INSERT：499999 行
 
 === 三、换分区之后，旧 part 的文件还被快照表留着 ===
   [符合] 快照表的 v.bin 仍是换分区之前原表那个 inode（1 = 是）：1
-  · 此刻那组文件的链接数：1。原表那边已经不再引用它们，这块空间要等快照表删掉才释放
+  · 此刻那组文件的链接数：1，即只剩快照表这一处引用。原表那边已经不再引用它们，
+  · 这块空间要等快照表删掉才释放
 
 === 四、从快照 REPLACE 回去（回滚） ===
-  [符合] 回滚后原表的 v.bin 是快照那个 inode（1 = 是）：1
+  [符合] 回滚后原表的 v.bin 是快照那个 inode（ch1 上看，1 = 是）：1
+  [符合] 三个副本上各自也是同一个 inode（ch1,ch2,ch3）：1,1,1
   [符合] 回滚后的行数回到 500000：500000
   [符合] 这条语句写入的行数：0
+  · 三个副本执行这几条操作时 part_log 记的事件（DownloadPart 才是从别的副本拉数据）：
+host	table	event_type	parts
+ch1	hl_bak	NewPart	1
+ch1	hl_src	NewPart	2
+ch2	hl_bak	NewPart	1
+ch2	hl_src	NewPart	2
+ch3	hl_bak	NewPart	1
+ch3	hl_src	NewPart	2
+  [符合] 三个副本都没有从别处拉数据（DownloadPart 合计）：0

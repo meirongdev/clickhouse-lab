@@ -7,9 +7,13 @@ CH2=${CH2:-http://localhost:18124}
 CH3=${CH3:-http://localhost:18125}
 NODES=("$CH1" "$CH2" "$CH3")
 NODE_NAMES=(ch1 ch2 ch3)
-# 实验 08 要进容器数 hardlink 链接数，是唯一一处绕过 HTTP 直接摸文件的地方。
+# 下面这些实验绕过 HTTP 直接摸容器，只能在 docker 宿主机上跑：
+#   08、13、20 进容器看文件（hardlink 链接数、inode、shadow/ 目录），12 停 / 冻 Keeper 容器，
+#   09、21 操作 Kafka 栈的容器。容器名必须和 CH1/CH2/CH3 指的是同一组节点，否则量的是别的机器。
 CH1_CONTAINER=${CH1_CONTAINER:-ch1}
-# 实验 12 要停掉 Keeper 看集群怎么退化，用得上容器名。
+CH2_CONTAINER=${CH2_CONTAINER:-ch2}
+CH3_CONTAINER=${CH3_CONTAINER:-ch3}
+NODE_CONTAINERS=("$CH1_CONTAINER" "$CH2_CONTAINER" "$CH3_CONTAINER")
 KEEPER_CONTAINER=${KEEPER_CONTAINER:-ch-keeper}
 
 # q <节点URL> <SQL>  在指定节点上执行，原样打印服务端返回。
@@ -30,8 +34,9 @@ q3() { q "$CH3" "$1"; }
 # on_all <SQL>  三个节点各执行一遍，不走 distributed DDL 队列。
 # 默认用 ON CLUSTER default（集群开了 distributed DDL，见 cfg/cluster.xml）。只有当实验
 # 本身要验「三个副本各自建的表共享同一套复制状态」时才用 on_all，用的地方在脚本文件头写明理由。
-# 现在只有实验 02 用它。背景：ReplicatedMergeTree 的 CREATE 不会自动传播到其他副本，
-# 早期版本的实验 02 只在 ch1 建表，跑成了单副本还以为是三副本。
+# 现在只有实验 02 用它（另有实验 07、13 故意只在 ch1 建单副本表，见各自文件头）。
+# 背景：ReplicatedMergeTree 的 CREATE 不会自动传播到其他副本，早期版本的实验 02 只在 ch1 建表，
+# 跑成了单副本还以为是三副本。
 on_all() { local n; for n in "${!NODES[@]}"; do q "${NODES[$n]}" "$1"; done; }
 
 # rr <序号> <SQL>  按序号轮流打到三个节点，模拟 Aiven 那种「连接随机落到任一节点」
@@ -81,18 +86,34 @@ wait_mutation() {
   printf '  等了 %ss 仍有 %s 个 mutation 没跑完\n' "$timeout" "$n"; return 1
 }
 
-# provenance  每份 log 的第一行：跑的时间、服务端版本、镜像、lab 的 git rev。
+# provenance  每份 log 的第一行：跑的时间、服务端版本、镜像、lab 的 git rev、有没有跑慢速段。
 # results/ 是要提交进仓库当证据的，没有这一行就分不清某份 log 是哪天、哪个镜像、哪一版脚本跑出来的。
 # 镜像那一项读的是本机 ch1 容器实际用的引用（compose 里钉了 digest），不是写死在这里的 tag，
 # 免得钉的和记的两边分头漂。取不到的字段填「未知」，不让它中断实验。
+# rev 后面带「+改动」表示跑的时候脚本或配置有未提交的修改：这时 rev 指的那一版不是实际跑的那一版。
+# SLOW=1 表示带上了默认跳过的慢速段（实验 02、13 各等几分钟）；没有这一项的 log 里就没有那几段的证据。
 provenance() {
-  local ver img rev root
+  local ver img rev root dirty slow=""
   root=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
   ver=$(q1 "SELECT version()" 2>/dev/null | tr -d '\n')
   img=$(docker inspect -f '{{.Config.Image}}' "$CH1_CONTAINER" 2>/dev/null) || img=未知
   rev=$(git -C "$root" rev-parse --short HEAD 2>/dev/null) || rev=未提交
-  printf '# 跑于 %s | 服务端 %s | 镜像 %s | lab %s\n' \
-    "$(date '+%F %T %z')" "${ver:-未知}" "${img:-未知}" "${rev:-未提交}"
+  dirty=$(git -C "$root" status --porcelain -- experiments lib.sh lib-kafka.sh cfg \
+            docker-compose.yml docker-compose-kafka.yml cluster.sh run-all.sh 2>/dev/null)
+  [ -n "$dirty" ] && rev="${rev}+改动"
+  [ "${SLOW:-0}" = "1" ] && slow=" | SLOW=1"
+  printf '# 跑于 %s | 服务端 %s | 镜像 %s | lab %s%s\n' \
+    "$(date '+%F %T %z')" "${ver:-未知}" "${img:-未知}" "${rev:-未提交}" "$slow"
+}
+
+# text_log_since <时间> <logger 名里的片段> <message LIKE 模式>  读服务端自己的 trace 日志。
+# 镜像默认 logger level 是 trace，并且开着 system.text_log，所以后台线程（比如裁剪线程）
+# 算出来的调度间隔用 SQL 就能读到，不用改日志级别、不用重启。
+text_log_since() {
+  q1 "SYSTEM FLUSH LOGS" >/dev/null
+  q1 "SELECT event_time_microseconds, message FROM system.text_log
+      WHERE event_time_microseconds >= '$1' AND logger_name LIKE '%$2%' AND message LIKE '$3'
+      ORDER BY event_time_microseconds FORMAT TSV"
 }
 
 require_cluster() {

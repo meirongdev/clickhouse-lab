@@ -1,18 +1,27 @@
+# Kafka 栈：实验 09、21、23 用，./cluster.sh up all 才会起它。
+#
+# 版本对齐 docs 里引的源码锚点：Confluent Platform 7.7.0 的社区版组件内置 Apache Kafka 3.7.0
+# （docs/mechanism-map.md 引的就是 3.7.0 的 WorkerConfig / WorkerSinkTask）。生产用的是 Confluent Cloud
+# 全托管的 ClickHouse sink connector，托管运行时看不到；这里只用 Apache Kafka 自带的行为和默认的 worker 配置。
+# 插件 clickhouse-kafka-connect v1.3.9 由 cluster.sh 下载并校验 sha256，不进 git。
+# 镜像同样钉 tag + digest，理由同 docker-compose.yml：不钉的话 results/ 里的数字会自己变。
+#   docker buildx imagetools inspect <image>:<tag> --format '{{.Manifest.Digest}}'
 services:
   zookeeper:
-    image: confluentinc/cp-zookeeper:7.4.0
+    image: confluentinc/cp-zookeeper:7.7.0@sha256:d4312a5b61b45ab5c4d33d4c77e5a235cdd95a16dbfc1d381639520a2af48f01
     container_name: zookeeper
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
 
   kafka:
-    image: confluentinc/cp-kafka:7.4.0
+    image: confluentinc/cp-kafka:7.7.0@sha256:1fa3cdb3ef77b75bc56e7040bbdfa2bd6950b6ee6363381b2493f7a83e07a0b3
     container_name: kafka
-    depends_on:
-      - zookeeper
-    ports:
-      - "9092:9092"
+    depends_on: [zookeeper]
+    # 换镜像重建时 ZooKeeper 的数据卷会被保留，旧 broker 的临时节点要等会话过期才消失，
+    # 新 broker 先起来会撞 NodeExists 退出。失败就重启，等旧会话过期自然就过了。
+    restart: on-failure
+    ports: ["9092:9092"]
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
@@ -22,12 +31,11 @@ services:
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
 
   connect:
-    image: confluentinc/cp-kafka-connect:7.4.0
+    image: confluentinc/cp-kafka-connect:7.7.0@sha256:84e15195a15d6aa1baee97f3adb134cbb7702171a1faacc60f7cf178e3f251c0
     container_name: connect
-    depends_on:
-      - kafka
-    ports:
-      - "8083:8083"
+    depends_on: [kafka]
+    restart: on-failure
+    ports: ["8083:8083"]
     environment:
       CONNECT_BOOTSTRAP_SERVERS: 'kafka:29092'
       CONNECT_REST_ADVERTISED_HOST_NAME: connect
@@ -35,7 +43,10 @@ services:
       CONNECT_GROUP_ID: compose-connect-group
       CONNECT_CONFIG_STORAGE_TOPIC: docker-connect-configs
       CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
-      CONNECT_OFFSET_FLUSH_INTERVAL_MS: 10000
+      # 取 Kafka 默认值 60000（3.7.0 WorkerConfig）。生产没有证据显示改过它，就按默认值复刻。
+      # 它决定重投什么时候发生：put() 抛 RetriableException 之后，框架要等到下一个提交点
+      # 才把同一批原样再交给 put()（实验 21 量的就是这段间隔）。
+      CONNECT_OFFSET_FLUSH_INTERVAL_MS: 60000
       CONNECT_OFFSET_STORAGE_TOPIC: docker-connect-offsets
       CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
       CONNECT_STATUS_STORAGE_TOPIC: docker-connect-status
@@ -43,6 +54,6 @@ services:
       CONNECT_KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
       CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
       CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
-      CONNECT_PLUGIN_PATH: "/usr/share/java,/usr/share/confluent-hub-components,/connect-plugins"
+      CONNECT_PLUGIN_PATH: "/usr/share/java,/connect-plugins"
     volumes:
       - ./connect-plugins:/connect-plugins

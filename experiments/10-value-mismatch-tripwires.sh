@@ -6,6 +6,16 @@
 #   3. 右表键不唯一时 INNER JOIN 放大行数，ANY JOIN 不放大——它保留哪一行按实测记。
 #
 # 三条的共同点是都不报错，所以归在「行数对得上但值不对」那一类里。
+#
+# 参考（方案设计依据。源码链接钉在 tag 上，行号只对那个 tag 成立；文档链接是当前版本的文档，和 25.3 有出入时以源码和实测为准）：
+#   - DateTime 的时区存在列的元数据里，决定 toDate 这类日历函数按哪个墙钟截断
+#     https://clickhouse.com/docs/reference/data-types/datetime#usage-remarks
+#   - uniq 是自适应采样的近似算法，uniqExact 才是精确值
+#     https://clickhouse.com/docs/reference/functions/aggregate-functions/uniq
+#   - ANY 严格度的定义
+#     https://clickhouse.com/docs/reference/statements/select/join#supported-types-of-join
+#   - join_any_take_last_row 在 25.3 源码里的说明（写的是只对 Join 引擎表生效，实测普通 JOIN 也被它翻转）
+#     https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Core/Settings.cpp#L2552-L2570
 set -uo pipefail
 source "$(dirname "$0")/../lib.sh"
 require_cluster
@@ -98,9 +108,9 @@ any_rows() { q1 "WITH l AS (SELECT number AS k FROM numbers(3)),
                  ) SETTINGS join_any_take_last_row = $1" | tr -d '\n'; }
 expect "join_any_take_last_row = 0（默认）取先出现的那行" "$(any_rows 0)" "v1,v1,v1"
 expect "join_any_take_last_row = 1 取后出现的那行"        "$(any_rows 1)" "v2,v2,v2"
-note "官方 JOIN 语句页没有写 ANY 保留哪一行（已核，2026-09-17 读的那一页只列了 ANY 的语法"
-note "和 join_any_take_last_row 这个设置，没有措辞承诺是第一行）。所以别在文档里写死"
-note "「ANY JOIN 取第一行」——它连默认值都是可配的。要确定性就自己 LIMIT 1 BY 加排序列。"
+note "25.3 源码里这个设置的说明写的是「只对 Join 引擎表生效」，而上面这张右表是普通子查询、走的是 hash join，"
+note "照样被它翻转了：以实测为准，不以说明为准。当前版本的文档还提醒 ANY JOIN 在并行 hash join 下可能返回不确定的行。"
+note "所以别在文档里写死「ANY JOIN 取第一行」——它连默认值都是可配的。要确定性就自己 LIMIT 1 BY 加排序列。"
 
 q1 "DROP TABLE IF EXISTS tz_utc ON CLUSTER default SYNC" >/dev/null
 q1 "DROP TABLE IF EXISTS tz_sh ON CLUSTER default SYNC" >/dev/null

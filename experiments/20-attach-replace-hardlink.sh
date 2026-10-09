@@ -27,8 +27,8 @@ require_cluster
 provenance
 FAILED=0
 
-PID=20260918
-DAY=1789689600000
+PID=20260324
+DAY=1774310400000
 for t in hl_src hl_bak hl_new; do q1 "DROP TABLE IF EXISTS $t ON CLUSTER default SYNC" >/dev/null; done
 # min_bytes_for_wide_part = 0：强制 Wide part，每列一个文件，才有 v.bin 可看
 q1 "CREATE TABLE hl_src ON CLUSTER default (id String, settle_time UInt64, v String)

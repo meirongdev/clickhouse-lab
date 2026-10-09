@@ -51,7 +51,7 @@ mk() {
   q1 "CREATE TABLE recov ON CLUSTER default (d Date, id UInt32)
       ENGINE = ReplicatedMergeTree('/ch/tables/{uuid}/recov','{replica}')
       PARTITION BY d ORDER BY id" >/dev/null
-  q1 "INSERT INTO recov VALUES ('2026-07-30',1),('2026-07-30',2),('2026-07-31',3)"
+  q1 "INSERT INTO recov VALUES ('2026-03-10',1),('2026-03-10',2),('2026-03-11',3)"
   q1 "SYSTEM SYNC REPLICA recov" >/dev/null
 }
 per_replica() {
@@ -63,7 +63,7 @@ sync_all() { local n; for n in "${NODES[@]}"; do q "$n" "SYSTEM SYNC REPLICA $1"
 section "一、DETACH / ATTACH PARTITION：摘下来再挂回去"
 mk
 expect "起始行数" "$(q1 "SELECT count() FROM recov")" "3"
-q1 "ALTER TABLE recov DETACH PARTITION '2026-07-30'" >/dev/null
+q1 "ALTER TABLE recov DETACH PARTITION '2026-03-10'" >/dev/null
 expect "DETACH 之后表里只剩另一个分区" "$(q1 "SELECT count() FROM recov")" "1"
 note "数据没被删，只是摘下来了，在 system.detached_parts 里看得到："
 q1 "SELECT partition_id, reason FROM system.detached_parts
@@ -71,7 +71,7 @@ q1 "SELECT partition_id, reason FROM system.detached_parts
 expect "detached part 数" \
   "$(q1 "SELECT count() FROM system.detached_parts
          WHERE database = currentDatabase() AND table = 'recov'")" "1"
-q1 "ALTER TABLE recov ATTACH PARTITION '2026-07-30'" >/dev/null
+q1 "ALTER TABLE recov ATTACH PARTITION '2026-03-10'" >/dev/null
 expect "ATTACH 之后行数原样回来" "$(q1 "SELECT count() FROM recov")" "3"
 note "DETACH 是可逆的，原地可救，不用碰备份。但它不是删除，真正的误删是下面那种"
 
@@ -92,7 +92,7 @@ expect "FREEZE 只在执行它的副本上冻：ch2 上没有这个 shadow/ 目�
   "$(docker exec "$CH2_CONTAINER" sh -c "test -d /var/lib/clickhouse/shadow/$BK && echo 有 || echo 没有")" "没有"
 note "所以每个副本要各自冻，或者只冻一个副本、靠下面这种「ATTACH 之后别的副本来拉」把数据带回去"
 
-q1 "ALTER TABLE recov DROP PARTITION '2026-07-30'" >/dev/null
+q1 "ALTER TABLE recov DROP PARTITION '2026-03-10'" >/dev/null
 sync_all recov
 expect "DROP PARTITION 之后三个副本都只剩另一个分区（ch1,ch2,ch3）" "$(per_replica recov)" "1,1,1"
 expect "DROP PARTITION 不留 detached，没有可以原地挂回去的东西" \
@@ -100,8 +100,8 @@ expect "DROP PARTITION 不留 detached，没有可以原地挂回去的东西" \
 
 note "还原：把 shadow/ 里那个分区的 part 目录拷进表的 detached/，再 ATTACH PARTITION"
 S0=$(date +%s)
-docker exec "$CH1_CONTAINER" sh -c "cp -a /var/lib/clickhouse/shadow/$BK/store/*/$UUID/20260730_* ${DATA}detached/"
-q1 "ALTER TABLE recov ATTACH PARTITION '2026-07-30'" >/dev/null
+docker exec "$CH1_CONTAINER" sh -c "cp -a /var/lib/clickhouse/shadow/$BK/store/*/$UUID/20260310_* ${DATA}detached/"
+q1 "ALTER TABLE recov ATTACH PARTITION '2026-03-10'" >/dev/null
 sync_all recov
 note "从拷目录到三个副本都追平，用了约 $(( $(date +%s) - S0 ))s（3 行的玩具表，这个数只说明步骤走得通，不代表生产耗时）"
 expect "还原之后三个副本的行数（ch1,ch2,ch3）" "$(per_replica recov)" "3,3,3"
@@ -166,9 +166,9 @@ note "服务端设置和查询级设置里都有这两项，默认都是 5000000
 q1 "DROP TABLE IF EXISTS droplimit ON CLUSTER default SYNC" >/dev/null
 q1 "CREATE TABLE droplimit ON CLUSTER default (d Date, id UInt32)
     ENGINE = ReplicatedMergeTree('/ch/tables/{uuid}/droplimit','{replica}') PARTITION BY d ORDER BY id" >/dev/null
-q1 "INSERT INTO droplimit VALUES ('2026-07-30',1),('2026-07-31',2)"
+q1 "INSERT INTO droplimit VALUES ('2026-03-10',1),('2026-03-11',2)"
 note "把阈值压到 1 字节，模拟「表比阈值大」："
-out=$(q1 "ALTER TABLE droplimit DROP PARTITION '2026-07-30' SETTINGS max_partition_size_to_drop = 1" 2>&1)
+out=$(q1 "ALTER TABLE droplimit DROP PARTITION '2026-03-10' SETTINGS max_partition_size_to_drop = 1" 2>&1)
 printf '  DROP PARTITION：%s\n' "$(printf '%s' "$out" | head -1 | cut -c1-120)"
 case "$out" in *TABLE_SIZE_EXCEEDS_MAX_DROP_SIZE_LIMIT*|*"Code: 359"*) echo "  [符合] 被拒" ;; *) echo "  [不符] 没被拒"; FAILED=1 ;; esac
 out=$(q1 "DROP TABLE droplimit SETTINGS max_table_size_to_drop = 1" 2>&1)
@@ -176,7 +176,7 @@ printf '  DROP TABLE：%s\n' "$(printf '%s' "$out" | head -1 | cut -c1-120)"
 case "$out" in *TABLE_SIZE_EXCEEDS_MAX_DROP_SIZE_LIMIT*|*"Code: 359"*) echo "  [符合] 被拒" ;; *) echo "  [不符] 没被拒"; FAILED=1 ;; esac
 expect "表还在" "$(q1 "EXISTS TABLE droplimit" | tr -d '\n')" "1"
 expect "只对这一条放开（max_partition_size_to_drop = 0 即不限）：DROP PARTITION 成功" \
-  "$(q1 "ALTER TABLE droplimit DROP PARTITION '2026-07-30' SETTINGS max_partition_size_to_drop = 0" 2>&1 | head -1)" ""
+  "$(q1 "ALTER TABLE droplimit DROP PARTITION '2026-03-10' SETTINGS max_partition_size_to_drop = 0" 2>&1 | head -1)" ""
 note "不用改服务端配置、不用放 force_drop_table 标记文件。超线被拒时先确认删的是想删的东西，再这样放开"
 q1 "DROP TABLE IF EXISTS droplimit ON CLUSTER default SYNC" >/dev/null
 

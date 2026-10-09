@@ -111,7 +111,7 @@ docs/                      日常排查用的知识，索引在 docs/README.md
 | # | 验的是什么 | 原来记在哪 | 量到了什么 |
 |---|---|---|---|
 | 09 | 坏批次到底去哪了（8 分区 topic，生产默认值 vs 配 DLQ vs 只开 `errors.tolerance=all`） | `data-problems.md`「少了」 | 默认值下一条类型不合的记录让 task `FAILED`，之后所有分区都卡在 Kafka 里，重启还是 `FAILED`；配了 DLQ，坏记录**所在分区那一整批**（含好记录）都进 DLQ；只开 tolerance 不配 DLQ，那一批静默消失、offset 照常提交；字段名对不上的记录不报错、补默认值 |
-| 10 | 时区声明、`uniq` 误差、JOIN 放大这三种「不报错的错」 | `data-problems.md`「不对」 | 同一时刻按 `DateTime('UTC')` 落 `20260730`、按 `Asia/Shanghai` 落 `20260731`；`uniq` 在 1000 万上偏 −0.16%，误差两个方向都有；`join_any_take_last_row` 能翻转 `ANY JOIN` 留下的行 |
+| 10 | 时区声明、`uniq` 误差、JOIN 放大这三种「不报错的错」 | `data-problems.md`「不对」 | 同一时刻按 `DateTime('UTC')` 落 `20260310`、按 `Asia/Shanghai` 落 `20260311`；`uniq` 在 1000 万上偏 −0.16%，误差两个方向都有；`join_any_take_last_row` 能翻转 `ANY JOIN` 留下的行 |
 | 11 | `parts_to_delay_insert` / `parts_to_throw_insert` 的先后顺序；一条 INSERT 切成几个 part | `mechanism-map.md`、演练条目 | 阈值压到 20 / 25：被拒时正好 25 个 part，之前已拖慢 5 次；`INSERT … SELECT` 每 1111953 行一个 part，客户端发 TSV 每 1048449 行一个，几千行的小批就是一个 |
 | 12 | 单节点 Keeper 出事，集群退化成什么样 | `deployment-architecture.md` 第 2 条 | 停掉：副本立刻只读、读照常、写被拒，默认参数下一条 INSERT 最多卡约 142 秒才报错；**冻住：约 10 秒才转只读，客户端第 30 秒超时，Keeper 回来后服务端那条 INSERT 照样提交**；Keeper 回来几秒内自愈 |
 | 13 | 误删之后各能救回什么 | `daily-checklist.md` 恢复动作 | `DETACH` 可逆；`DROP PARTITION` 没有后悔药，从 `FREEZE` 备份拷回 `detached/` 再 `ATTACH` 能还原到三个副本；`UNDROP` 在 480 秒内有效、`SYNC` 之后无效；先 `SYSTEM DROP REPLICA` 再 `UNDROP`，表回来是只读的，要 `SYSTEM RESTORE REPLICA`；大小阈值可以只对一条语句放开 |
@@ -199,7 +199,7 @@ docs/                      日常排查用的知识，索引在 docs/README.md
 
 那条 `system.replicas.zookeeper_path` 前置检查仍然值得做，价值在于建表之前就知道会撞，而不是防静默损坏。危害描述要改。
 
-### C. `PARTITION '20260730'` 也是接受的
+### C. `PARTITION '20260310'` 也是接受的
 
 文章四现在写的是「分区表达式是整数，按第一条它不该带引号」。
 
@@ -207,10 +207,10 @@ docs/                      日常排查用的知识，索引在 docs/README.md
 
 | 写法 | 结果 |
 |---|---|
-| `PARTITION ID '20260730'` | 接受 |
-| `PARTITION ID 20260730` | 拒绝，`Expected one of: string literal, substitution` |
-| `PARTITION 20260730` | 接受 |
-| `PARTITION '20260730'` | 接受 |
+| `PARTITION ID '20260310'` | 接受 |
+| `PARTITION ID 20260310` | 拒绝，`Expected one of: string literal, substitution` |
+| `PARTITION 20260310` | 接受 |
+| `PARTITION '20260310'` | 接受 |
 
 加引号的那种是真解析到了那个分区，不是空跑：拿它 `DETACH PARTITION` 之后 active part 数变 0，`ATTACH` 回来又变 1。
 

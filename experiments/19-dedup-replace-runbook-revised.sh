@@ -35,8 +35,8 @@ require_cluster
 provenance
 FAILED=0
 
-PID=20260918
-DAY=1789689600000; NEXT=1789776000000; W0=1789725600000; W1=1789728300000
+PID=20260324
+DAY=1774310400000; NEXT=1774396800000; W0=1774346400000; W1=1774349100000
 N=100000; D=18
 T=ev19
 COLS="id, settle_ms, rev, create_time, ext_id, player, agent, amount, win, status, memo"
@@ -170,7 +170,7 @@ R5
 expect "R6：每个副本 行数/重复键 | 全副本队列 | 快照到换分区之间的 NewPart 行数" "$(R6)" "$OK3|0|0"
 expect "标准答案：新分区里找不到原样的行" "$(bad_rows)" "0"
 expect "标准答案：丢了的键" "$(lost_keys)" "0"
-expect "前一天、后一天没动" "$(q1 "SELECT countIf(_partition_id = '20260917'), countIf(_partition_id = '20260919') FROM $T FORMAT CSV")" "1000,1000"
+expect "前一天、后一天没动" "$(q1 "SELECT countIf(_partition_id = '20260323'), countIf(_partition_id = '20260325') FROM $T FORMAT CSV")" "1000,1000"
 
 section "2、回滚演练：R7 把快照换回去，再换回去重后的版本"
 R7

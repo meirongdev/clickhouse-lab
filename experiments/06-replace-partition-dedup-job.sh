@@ -19,8 +19,8 @@ require_cluster
 provenance
 FAILED=0
 
-PID=20260730
-DAY_MS=1785369600000   # 2026-07-30T00:00:00Z
+PID=20260310
+DAY_MS=1773100800000   # 2026-03-10T00:00:00Z
 ROWS=10000             # 正常数据行数
 DUPS=5                 # 重复的键组数，每组 2 行
 RATIO_LIMIT=0.1        # 多余行占比的上限，百分比。超过这条线就不是零星写重，runbook 该中止另查原因

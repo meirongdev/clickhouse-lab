@@ -114,7 +114,7 @@ docker exec ch1 bash -c 'exec 3<>/dev/tcp/keeper/9181 && printf mntr >&3 && time
   |---|---|
   | 代价随查询形状 | `count()` 最惨：不带 `FINAL` 只读元数据的 1 行，带上就得扫完整表。走排序键的范围查询贵一倍上下 |
   | 代价随重叠 | 跟着「落在互相重叠的区间里的行」走，不是单纯跟着 part 数：重叠集中在一小段键上时，part 从 14 个堆到 29 个耗时不变；同样 14 个 part、重叠铺满整个键范围时贵两三倍；合成 1 个 part 之后没有重叠，退化成普通读取 |
-  | 和自己去重比 | 在还有重叠 part 的时候，自己 `GROUP BY` 去重的内存是 `FINAL` 的十几到几十倍，耗时是几倍到几十倍（重叠集中时差距最大、铺满时最小；耗时每轮波动大，两次实跑在 3 倍到 36 倍之间）；`LIMIT 1 BY` 更慢 |
+  | 和自己去重比 | 在还有重叠 part 的时候，自己 `GROUP BY` 去重的内存是 `FINAL` 的十几到几十倍，耗时是几倍到几十倍（重叠集中时差距最大、铺满时最小；耗时每轮波动大，几轮实跑在 3 倍到 51 倍之间）；`LIMIT 1 BY` 跟它差不多或更慢 |
 
   每次跑的具体毫秒数都会变，确切数字看 `results/14-replacing-final-cost.log` 那一轮的记录，这里只留量级。早期版本这里写的是「`OPTIMIZE` 之后快五到七倍」「比手写去重便宜两个数量级」：那两个数都是拿合并成 1 个 part、已经没有东西要归并的 `FINAL` 去比的，不公平，已经按上表改掉。
 
@@ -182,7 +182,7 @@ lab 里一个都没有：RBAC 与 TLS、profile 兜底（`max_memory_usage`、`m
 | 一条 INSERT 产生的 part 数 | ≈ 450（`INSERT … SELECT` 每 1111953 行一个，见 `mechanism-map.md`） | 停了 merge 的话要留意 `parts_to_delay_insert` = 1000 |
 | `FINAL` 查询内存 | 十几到几十 MiB，归并是流式的，不随行数暴涨 | 够 |
 
-**手写去重那一节到了这个量级会换一种结局**：实验 14 第四节那个「自己 `GROUP BY` 去重」在 1050 万行上用了 1.2 GiB 左右，按去重键数线性外推，5 亿行要 ≈ 58 GiB，本机总共 16 GiB。但 25.3 默认 `max_bytes_ratio_before_external_group_by` / `_sort` = 0.5（[源码](https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Core/Settings.cpp#L2420-L2448)，lab 上查过），用到一半可用内存就开始落盘，所以预期不是 `MEMORY_LIMIT_EXCEEDED`，而是落盘之后慢下来（早期版本这里写的「必然内存超限」是错的）。那一节到了这个量级要改成：记录 `FINAL` 的耗时，再记录手写去重落盘的字节数和耗时——在生产量级上，手写去重不是做不到，是贵得多（待一手观察）。
+**手写去重那一节到了这个量级会换一种结局**：实验 14 第四节那个「自己 `GROUP BY` 去重」在 1050 万行上用了 1.2–1.5 GiB（每轮有波动），按去重键数线性外推，5 亿行要 ≈ 58–72 GiB，本机总共 16 GiB。但 25.3 默认 `max_bytes_ratio_before_external_group_by` / `_sort` = 0.5（[源码](https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Core/Settings.cpp#L2420-L2448)，lab 上查过），用到一半可用内存就开始落盘，所以预期不是 `MEMORY_LIMIT_EXCEEDED`，而是落盘之后慢下来（早期版本这里写的「必然内存超限」是错的）。那一节到了这个量级要改成：记录 `FINAL` 的耗时，再记录手写去重落盘的字节数和耗时——在生产量级上，手写去重不是做不到，是贵得多（待一手观察）。
 
 实现上按实验 13 的 `SLOW=1` 那个路子做成 opt-in，别让 `run-all` 默认多跑十几分钟：
 

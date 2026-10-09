@@ -43,11 +43,11 @@ require_cluster
 provenance
 FAILED=0
 
-PID=20260918
-DAY=1789689600000      # 2026-09-18T00:00:00Z
-NEXT=1789776000000     # 2026-09-19T00:00:00Z
-W0=1789725600000       # 10:00:00Z，窗口起点（窗口长度照生产取 45 分钟，时刻是 lab 自己定的）
-W1=1789728300000       # 10:45:00Z，窗口终点（BETWEEN，含两端）
+PID=20260324
+DAY=1774310400000      # 2026-03-24T00:00:00Z
+NEXT=1774396800000     # 2026-03-25T00:00:00Z
+W0=1774346400000       # 10:00:00Z，窗口起点（窗口长度照生产取 45 分钟，时刻是 lab 自己定的）
+W1=1774349100000       # 10:45:00Z，窗口终点（BETWEEN，含两端）
 N=100000               # 当天正常行数，每 864 ms 一行铺满一天；窗口里 3,125 行，占比约 3%，和生产同形
 WIN=3125
 D=18                   # 多余的副本：12 份 create_time 和原行相同，6 份晚 5 秒（生产那批已核对的重复里约三分之二 create_time 相同）
@@ -173,7 +173,7 @@ expect "标准答案：剩下的重复键" "$(dup_keys st_a)" "0"
 expect "晚 5 秒那 6 份没留下来（留下的都是最早那份）" \
   "$(q1 "SELECT count() FROM st_a WHERE _partition_id = '$PID' AND id IN (SELECT concat('b-', toString(41667 + number * 150)) FROM numbers($D))
          AND create_time != toDateTime64((settle_ms) / 1000 + 1, 3, 'UTC')")" "0"
-expect "前一天、后一天的行数没动" "$(q1 "SELECT countIf(_partition_id = '20260917'), countIf(_partition_id = '20260919') FROM st_a FORMAT CSV")" "1000,1000"
+expect "前一天、后一天的行数没动" "$(q1 "SELECT countIf(_partition_id = '20260323'), countIf(_partition_id = '20260325') FROM st_a FORMAT CSV")" "1000,1000"
 expect "三个副本当天行数" "$(q1 "SELECT arrayStringConcat(groupArray(c), ',') FROM (SELECT hostName() AS h, count() AS c
          FROM clusterAllReplicas('default', currentDatabase(), st_a) WHERE _partition_id = '$PID' GROUP BY h ORDER BY h)")" "$N,$N,$N"
 
@@ -204,14 +204,14 @@ expect "标准答案：丢了的键（= 窗口里每一个键）" "$(lost_keys s
 section "四、argMin 跳过 NULL：两份内容不同时会拼出一行原来没有的数据"
 q1 "DROP TABLE IF EXISTS st_d ON CLUSTER default SYNC" >/dev/null
 mk st_d "$DEF_A"
-q1 "INSERT INTO st_d ($COLS) VALUES ('x', $W0, 0, '2026-09-18 10:00:01.000', 'e', 'p', 'a', 1, 0, 1, NULL)"
-q1 "INSERT INTO st_d ($COLS) VALUES ('x', $W0, 0, '2026-09-18 10:00:06.000', 'e', 'p', 'a', 1, 0, 1, 'from-retry')"
+q1 "INSERT INTO st_d ($COLS) VALUES ('x', $W0, 0, '2026-03-24 10:00:01.000', 'e', 'p', 'a', 1, 0, 1, NULL)"
+q1 "INSERT INTO st_d ($COLS) VALUES ('x', $W0, 0, '2026-03-24 10:00:06.000', 'e', 'p', 'a', 1, 0, 1, 'from-retry')"
 q1 "SYSTEM SYNC REPLICA st_d" >/dev/null
 q1 "SELECT min(create_time) AS ct, argMin(memo, create_time) AS memo FROM st_d GROUP BY id
     SETTINGS prefer_column_name_to_alias = 1 FORMAT TSVWithNames"
 expect "argMin 拼出来的那行：create_time 来自第一份、memo 来自第二份" \
   "$(q1 "SELECT concat(toString(min(create_time)), '|', ifNull(argMin(memo, create_time), 'NULL')) FROM st_d GROUP BY id
-         SETTINGS prefer_column_name_to_alias = 1")" "2026-09-18 10:00:01.000|from-retry"
+         SETTINGS prefer_column_name_to_alias = 1")" "2026-03-24 10:00:01.000|from-retry"
 note "实验 06 的前置校验二（每组业务列哈希数必须是 1）能先拦下它，但哈希要包一层 tuple："
 note "cityHash64 的参数里只要有一个 NULL，结果就是 NULL，uniqExact 再把 NULL 跳过，两种内容只数出一种"
 expect "直接 cityHash64(…, memo)：这组的哈希数（漏数）" \

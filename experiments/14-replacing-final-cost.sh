@@ -37,7 +37,7 @@ FAILED=0
 ROWS=${ROWS:-10000000}              # 正常数据
 REPOSTS=${REPOSTS:-5}               # 重投次数
 REPOST_ROWS=${REPOST_ROWS:-100000}  # 每次重投的行数
-DAY_MS=1785369600000
+DAY_MS=1773100800000
 SPREAD_STEP=$((ROWS / REPOST_ROWS)) # 铺满版本里每次重投的键间隔：100000 行铺满 1000 万个键
 
 q1 "SELECT name, value FROM system.settings

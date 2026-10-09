@@ -32,9 +32,9 @@ require_cluster
 provenance
 FAILED=0
 
-PID=20260918
-DAY=1789689600000
-W0=1789725600000; W1=1789728300000
+PID=20260324
+DAY=1774310400000
+W0=1774346400000; W1=1774349100000
 WIN=100000            # 窗口里的行数：这个实验要量的是「子查询读几遍窗口」，窗口做大一点读数才稳
 D=3
 T=ev18
@@ -55,7 +55,7 @@ add_dups() {
   DUP_ROUND=$((DUP_ROUND + 1))
   q1 "INSERT INTO $T SETTINGS insert_deduplication_token = 'dups-$DUP_ROUND'
       SELECT concat('k', toString(number)), $W0 + number * 20, 0,
-        toDateTime64('2026-09-18 10:00:05', 3, 'UTC'), 'dup' FROM numbers($D)"
+        toDateTime64('2026-03-24 10:00:05', 3, 'UTC'), 'dup' FROM numbers($D)"
   q1 "SYSTEM SYNC REPLICA $T" >/dev/null
   expect "第 $DUP_ROUND 轮重复真的写进来了（当天行数 = $WIN + $D）" \
     "$(q1 "SELECT count() FROM $T WHERE _partition_id = '$PID'" | tr -d '\n')" "$((WIN + D))"
@@ -104,7 +104,7 @@ q1 "CREATE TABLE $T ON CLUSTER default (id String, settle_ms UInt64, rev UInt16,
     ENGINE = ReplicatedMergeTree('/ch/tables/{uuid}/$T', '{replica}')
     PARTITION BY toYYYYMMDD(toDateTime(settle_ms / 1000)) ORDER BY (settle_ms, id, rev)" >/dev/null
 add_days 1 60
-q1 "INSERT INTO $T SELECT concat('k', toString(number)), $W0 + number * 20, 0, toDateTime64('2026-09-18 10:00:00', 3, 'UTC'), 'x'
+q1 "INSERT INTO $T SELECT concat('k', toString(number)), $W0 + number * 20, 0, toDateTime64('2026-03-24 10:00:00', 3, 'UTC'), 'x'
     FROM numbers($WIN)"
 add_dups
 note "active part 数：$(parts)"
@@ -171,13 +171,13 @@ note "所以用方法一时不能拿 system.parts 的 sum(rows) 当核对，要�
 
 section "五、不带子查询、只写字面量键的轻量删除，不加 IN PARTITION 照样改全表每个 part"
 note "常见的另一种写法：先把要删的键和那份副本的 create_time 查出来，再贴成字面量去删（确定性的，不需要 allow_nondeterministic_mutations）"
-q1 "INSERT INTO $T SELECT 'lit-a', $W0 + 1, 0, toDateTime64('2026-09-18 10:00:00', 3, 'UTC'), 'x'"
-q1 "INSERT INTO $T SELECT 'lit-a', $W0 + 1, 0, toDateTime64('2026-09-18 10:00:47', 3, 'UTC'), 'x'"
+q1 "INSERT INTO $T SELECT 'lit-a', $W0 + 1, 0, toDateTime64('2026-03-24 10:00:00', 3, 'UTC'), 'x'"
+q1 "INSERT INTO $T SELECT 'lit-a', $W0 + 1, 0, toDateTime64('2026-03-24 10:00:47', 3, 'UTC'), 'x'"
 q1 "SYSTEM SYNC REPLICA $T" >/dev/null
 p_before=$(parts)
 other_before=$(q1 "SELECT count() FROM system.parts WHERE database = currentDatabase() AND table = '$T' AND partition_id != '$PID' AND active" | tr -d '\n')
 q1 "SYSTEM FLUSH LOGS" >/dev/null; t0=$(q1 "SELECT now64(6)" | tr -d '\n')
-q1 "DELETE FROM $T WHERE (id, settle_ms, rev) IN (('lit-a', $((W0 + 1)), 0)) AND create_time = '2026-09-18 10:00:47'"
+q1 "DELETE FROM $T WHERE (id, settle_ms, rev) IN (('lit-a', $((W0 + 1)), 0)) AND create_time = '2026-03-24 10:00:47'"
 wait_mutation $T 120 >/dev/null
 q1 "SYSTEM FLUSH LOGS" >/dev/null
 m_all=$(q1 "SELECT countIf(event_type = 'MutatePart') FROM system.part_log WHERE database = currentDatabase() AND table = '$T' AND event_time_microseconds >= '$t0'" | tr -d '\n')
@@ -189,13 +189,13 @@ expect "别的分区那些都是 hardlink 克隆（克隆数 ≥ 别的分区 pa
 expect "克隆写盘字节数" "$UNTOUCHED_BYTES" "0"
 note "字面量 DELETE 没有子查询，判断命没命中只靠主键和分区裁剪，所以读不放大；代价是每个 part 都要换一个"
 note "新版本（目录、元数据、Keeper 里的 mutation 记录），part 多的表上这本身就是负担。加 IN PARTITION 才只碰当天"
-expect "删对了：晚 47 秒那份没了，早的那份还在" "$(q1 "SELECT groupArray(toString(create_time)) FROM $T WHERE id = 'lit-a'")" "['2026-09-18 10:00:00.000']"
+expect "删对了：晚 47 秒那份没了，早的那份还在" "$(q1 "SELECT groupArray(toString(create_time)) FROM $T WHERE id = 'lit-a'")" "['2026-03-24 10:00:00.000']"
 
 section "六、两份 create_time 相同时，「按 create_time 删较晚那份」会两份一起删掉"
-q1 "INSERT INTO $T SELECT 'tie-a', $W0 + 2, 0, toDateTime64('2026-09-18 10:00:00', 3, 'UTC'), 'x'"
-q1 "INSERT INTO $T SELECT 'tie-a', $W0 + 2, 0, toDateTime64('2026-09-18 10:00:00', 3, 'UTC'), 'x'"
+q1 "INSERT INTO $T SELECT 'tie-a', $W0 + 2, 0, toDateTime64('2026-03-24 10:00:00', 3, 'UTC'), 'x'"
+q1 "INSERT INTO $T SELECT 'tie-a', $W0 + 2, 0, toDateTime64('2026-03-24 10:00:00', 3, 'UTC'), 'x'"
 q1 "SYSTEM SYNC REPLICA $T" >/dev/null
-q1 "DELETE FROM $T IN PARTITION ID '$PID' WHERE (id, settle_ms, rev) IN (('tie-a', $((W0 + 2)), 0)) AND create_time = '2026-09-18 10:00:00'"
+q1 "DELETE FROM $T IN PARTITION ID '$PID' WHERE (id, settle_ms, rev) IN (('tie-a', $((W0 + 2)), 0)) AND create_time = '2026-03-24 10:00:00'"
 wait_mutation $T 120 >/dev/null
 expect "这个键还剩几行（两份都被删了）" "$(q1 "SELECT count() FROM $T WHERE id = 'tie-a'")" "0"
 note "同一秒写进来的两份（DateTime 精度到秒时很常见）用 create_time 分不开，只能靠 _part/_part_offset 或整分区重写"

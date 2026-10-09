@@ -57,7 +57,7 @@ LIMIT 20;
   ```sql
   SELECT name, value FROM system.server_settings WHERE name LIKE '%size_to_drop%';
   -- 确认删的就是想删的东西之后，只对这一条语句放开（0 = 不限），不用改服务端配置、不用放 force_drop_table：
-  ALTER TABLE t DROP PARTITION '2026-07-30' SETTINGS max_partition_size_to_drop = 0;
+  ALTER TABLE t DROP PARTITION '2026-03-10' SETTINGS max_partition_size_to_drop = 0;
   DROP TABLE t SETTINGS max_table_size_to_drop = 0;
   ```
 

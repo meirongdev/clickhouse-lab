@@ -38,7 +38,7 @@ q1 "CREATE TABLE tz_sh ON CLUSTER default (ts DateTime('Asia/Shanghai'), id UInt
 
 # 同一批「绝对时刻」，写法上把时区写死，免得被客户端会话时区影响。
 # id=1 那条卡在 UTC 日界前半小时，id=2 那条在白天。
-VALS="(toDateTime('2026-07-30 23:30:00','UTC'), 1), (toDateTime('2026-07-30 10:00:00','UTC'), 2)"
+VALS="(toDateTime('2026-03-10 23:30:00','UTC'), 1), (toDateTime('2026-03-10 10:00:00','UTC'), 2)"
 q1 "INSERT INTO tz_utc VALUES $VALS"
 q1 "INSERT INTO tz_sh  VALUES $VALS"
 q1 "SYSTEM SYNC REPLICA tz_utc" >/dev/null; q1 "SYSTEM SYNC REPLICA tz_sh" >/dev/null
@@ -53,15 +53,15 @@ q1 "SELECT * FROM (
 parts_of() { q1 "SELECT arrayStringConcat(arraySort(groupUniqArray(_partition_id)), ',') FROM $1" | tr -d '\n'; }
 expect "两张表存的是同一批绝对时刻，行数一样" \
   "$(q1 "SELECT count() FROM tz_utc")-$(q1 "SELECT count() FROM tz_sh")" "2-2"
-expect "tz_utc 的分区集合" "$(parts_of tz_utc)" "20260730"
-expect "tz_sh  的分区集合" "$(parts_of tz_sh)"  "20260730,20260731"
+expect "tz_utc 的分区集合" "$(parts_of tz_utc)" "20260310"
+expect "tz_sh  的分区集合" "$(parts_of tz_sh)"  "20260310,20260311"
 
 note "同一批数据、同一个分区键表达式，分区却不一样：时区声明改的是 toYYYYMMDD 按哪个墙钟截断"
-expect "按事件日 20260730 查 tz_utc，查得到 2 行" \
-  "$(q1 "SELECT count() FROM tz_utc WHERE toYYYYMMDD(ts) = 20260730")" "2"
-expect "同一条查询打到 tz_sh 只剩 1 行（另一行跑到 20260731 去了）" \
-  "$(q1 "SELECT count() FROM tz_sh WHERE toYYYYMMDD(ts) = 20260730")" "1"
-note "这就是「少了一行」的典型形状：没有报错，两边都自称查的是 7 月 30 日"
+expect "按事件日 20260310 查 tz_utc，查得到 2 行" \
+  "$(q1 "SELECT count() FROM tz_utc WHERE toYYYYMMDD(ts) = 20260310")" "2"
+expect "同一条查询打到 tz_sh 只剩 1 行（另一行跑到 20260311 去了）" \
+  "$(q1 "SELECT count() FROM tz_sh WHERE toYYYYMMDD(ts) = 20260310")" "1"
+note "这就是「少了一行」的典型形状：没有报错，两边都自称查的是 3 月 10 日"
 
 section "二、uniq 是近似值，对账口径只能用 uniqExact"
 q1 "SELECT n, uniq, exact, uniq - exact AS diff, round((uniq - exact) / exact * 100, 4) AS err_pct

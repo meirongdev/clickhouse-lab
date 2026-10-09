@@ -1,4 +1,4 @@
-# 跑于 2026-10-05 02:46:05 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab ca4e119+改动 | SLOW=1
+# 跑于 2026-10-07 01:14:31 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab fe2db37+改动 | SLOW=1
 name	value
 do_not_merge_across_partitions_select_final	0
 split_intersecting_parts_ranges_into_layers_final	1
@@ -21,36 +21,36 @@ split_parts_ranges_into_intersecting_and_non_intersecting_final	1
 
 === 二、代价随查询形状变，不是一个固定倍数（rmt） ===
   count()                      1 ms  1.00 行  4.02 MiB
-  count() FINAL                16 ms  10.80 million 行  12.31 MiB
-  范围查询（走排序键） 5 ms  344.06 thousand 行  4.11 MiB
-  范围查询 FINAL           12 ms  491.52 thousand 行  11.05 MiB
+  count() FINAL                12 ms  10.80 million 行  12.41 MiB
+  范围查询（走排序键） 6 ms  344.06 thousand 行  4.10 MiB
+  范围查询 FINAL           10 ms  491.52 thousand 行  11.06 MiB
   [符合] 不带 FINAL 的 count() 只读元数据（read_rows = 1）：1
   [符合] 带 FINAL 的 count() 得真扫一遍（1 = read_rows 不小于表行数）：1
-  · 范围查询带 FINAL 是不带的 2.4 倍
+  · 范围查询带 FINAL 是不带的 1.7 倍
   · 最贵的是 count()：不带 FINAL 走元数据快捷路径，带上就得把每个 part 读一遍。走排序键的范围查询
   · 只碰被扫到的那几个 granule，额外开销是同一个量级——「FINAL 贵不贵」要看查询形状，拿 count() 的倍数吓人是不对的。
 
 === 三、代价跟着「落在重叠区间里的行」走，而不只是 part 数 ===
   · 再往 rmt 里堆 15 个集中在前 20000 个键上的小 part（同样每个给不同的 token）
-  rmt（重叠集中在前 10 万个键）  14 个 part → count() FINAL 中位 17 ms
-  rmt 再堆 15 个集中的小 part  29 个 part → count() FINAL 中位 17 ms
-  rmt_spread（重叠铺满全部键）  14 个 part → count() FINAL 中位 52 ms
+  rmt（重叠集中在前 10 万个键）  14 个 part → count() FINAL 中位 20 ms
+  rmt 再堆 15 个集中的小 part  29 个 part → count() FINAL 中位 20 ms
+  rmt_spread（重叠铺满全部键）  14 个 part → count() FINAL 中位 60 ms
   [符合] 同样的 part 数，重叠铺满的比重叠集中的贵（1 = 是）：1
   · 看上面三行：重叠集中时，part 从 14 个堆到 29 个，耗时基本不跟着涨——绝大部分区间不和别的 part
   · 相交，直接读；同样 14 个 part，重叠铺满时每一段都要归并，耗时成倍上去。所以光数 part 不够，
   · 要看新写进来的 part 和旧 part 在排序键上交叠得多广。按时间排序、只重投最近一批的表，重叠天然是集中的。
 
 === 四、和「不用 FINAL、自己在查询里去重」比（两张表都还有重叠 part 的时候） ===
-  rmt          FINAL                  24 ms  17.15 MiB
-  rmt          自己 GROUP BY 去重 755 ms  1.19 GiB
-  rmt          自己 LIMIT 1 BY 去重 1178 ms  1.15 GiB
-  rmt_spread   FINAL                  60 ms  74.45 MiB
-  rmt_spread   自己 GROUP BY 去重 207 ms  974.53 MiB
-  rmt_spread   自己 LIMIT 1 BY 去重 1034 ms  1.16 GiB
-  · rmt：GROUP BY 去重的耗时是 FINAL 的 31 倍，内存是 71 倍
+  rmt          FINAL                  25 ms  17.15 MiB
+  rmt          自己 GROUP BY 去重 1284 ms  1.52 GiB
+  rmt          自己 LIMIT 1 BY 去重 1197 ms  1.15 GiB
+  rmt_spread   FINAL                  65 ms  78.90 MiB
+  rmt_spread   自己 GROUP BY 去重 664 ms  1.46 GiB
+  rmt_spread   自己 LIMIT 1 BY 去重 1064 ms  1.16 GiB
+  · rmt：GROUP BY 去重的耗时是 FINAL 的 51 倍，内存是 91 倍
   [符合] rmt：FINAL 比自己 GROUP BY 去重省内存（差一个数量级以上，1 = 是）：1
   [符合] rmt：FINAL 比自己 GROUP BY 去重快（1 = 是）：1
-  · rmt_spread：GROUP BY 去重的耗时是 FINAL 的 3 倍，内存是 13 倍
+  · rmt_spread：GROUP BY 去重的耗时是 FINAL 的 10 倍，内存是 19 倍
   [符合] rmt_spread：FINAL 比自己 GROUP BY 去重省内存（差一个数量级以上，1 = 是）：1
   [符合] rmt_spread：FINAL 比自己 GROUP BY 去重快（1 = 是）：1
   · FINAL 能利用「每个 part 本来就按排序键有序」这件事，做的是流式归并；
@@ -61,7 +61,7 @@ split_parts_ranges_into_intersecting_and_non_intersecting_final	1
 === 五、OPTIMIZE FINAL 之后：重复行被物理去掉，FINAL 也没有东西要归并了 ===
   [符合] rmt 合并之后的 part 数：1
   [符合] rmt 不带 FINAL 也只剩去重后的行数：10000000
-  rmt          1 个 part → count() FINAL 中位 4 ms
+  rmt          1 个 part → count() FINAL 中位 5 ms
   [符合] rmt_spread 合并之后的 part 数：1
   [符合] rmt_spread 不带 FINAL 也只剩去重后的行数：10000000
   rmt_spread   1 个 part → count() FINAL 中位 4 ms

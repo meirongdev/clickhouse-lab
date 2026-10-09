@@ -1,21 +1,21 @@
-# 跑于 2026-10-05 02:31:28 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab ca4e119+改动 | SLOW=1
+# 跑于 2026-10-07 01:06:20 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab fe2db37+改动 | SLOW=1
   · 分区键 toYYYYMMDD(toDateTime(ts/1000))，值是整数
 partition	partition_id
-20260730	20260730
+20260310	20260310
 
 === 四种写法 ===
-  [符合] PARTITION ID '20260730'    → 接受（期望接受）  文章采用的写法
-  [符合] PARTITION ID 20260730      → 拒绝（期望拒绝）  分区 ID 不加引号
-  [符合] PARTITION 20260730         → 接受（期望接受）  分区表达式，整数不加引号
-  [符合] PARTITION '20260730'       → 接受（期望接受）  分区表达式加引号
+  [符合] PARTITION ID '20260310'    → 接受（期望接受）  文章采用的写法
+  [符合] PARTITION ID 20260310      → 拒绝（期望拒绝）  分区 ID 不加引号
+  [符合] PARTITION 20260310         → 接受（期望接受）  分区表达式，整数不加引号
+  [符合] PARTITION '20260310'       → 接受（期望接受）  分区表达式加引号
 
 === 唯一被拒的那种，报错原文 ===
-  PARTITION ID 20260730
-    Code: 62. DB::Exception: Syntax error: failed at position 41 (20260730): 20260730. Expected one of: string literal, substitution. (SYNTAX_ERROR) (version 25.3.14.14 (official build))
+  PARTITION ID 20260310
+    Code: 62. DB::Exception: Syntax error: failed at position 41 (20260310): 20260310. Expected one of: string literal, substitution. (SYNTAX_ERROR) (version 25.3.14.14 (official build))
 
 === 加了引号的分区表达式是真解析到那个分区，还是空跑 ===
   · OPTIMIZE 成功与否看不出来，换 DETACH PARTITION：真解析到了，active part 会变 0
-  [符合] DETACH PARTITION '20260730' 之后 active part 数：0
+  [符合] DETACH PARTITION '20260310' 之后 active part 数：0
   [符合] ATTACH 回来之后：1
   · 结论：Int 型分区表达式加不加引号都能用，文档说的是 Date/Int 不「需要」引号，不是不许加。
   · 分区 ID 那条是硬的，PARTITION ID 后面必须是字符串字面量。

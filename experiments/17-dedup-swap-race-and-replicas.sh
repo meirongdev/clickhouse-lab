@@ -37,8 +37,8 @@ require_cluster
 provenance
 FAILED=0
 
-PID=20260918
-DAY=1789689600000; NEXT=1789776000000; W0=1789725600000; W1=1789728300000
+PID=20260324
+DAY=1774310400000; NEXT=1774396800000; W0=1774346400000; W1=1774349100000
 N=100000; D=18
 COLS="id, settle_ms, rev, create_time, ext_id, player, agent, amount, win, status, memo"
 DEF="id String, settle_ms UInt64, rev UInt16, create_time DateTime64(3, 'UTC'), ext_id String,
@@ -101,7 +101,7 @@ T_SNAP=$(q1 "SELECT now64(6)" | tr -d '\n')
 plan_build 1 ev17a
 expect "方案校验 1：临时表窗口内重复数" "$(gate_dup 1 ev17a)" "0"
 expect "方案校验 2：原表 − 临时表" "$(gate_diff 1 ev17a)" "$D"
-note "校验过了，换分区之前：一个补发任务经 ch2 往 09-18 写 50 行，另一个往 09-19 写 20 行"
+note "校验过了，换分区之前：一个补发任务经 ch2 往 03-24 写 50 行，另一个往 03-25 写 20 行"
 extra 2 ev17a r- 50 $((DAY + 50000000))
 extra 2 ev17a s- 20 $((NEXT + 50000000))
 q1 "SYSTEM SYNC REPLICA ev17a" >/dev/null
@@ -111,8 +111,8 @@ plan_swap 1 ev17a; q1 "SYSTEM SYNC REPLICA ev17a" >/dev/null
 q1 "DROP TABLE IF EXISTS ev17a_tmp ON CLUSTER default SYNC" >/dev/null
 expect "方案核对：system.parts 当天行数 = 预期" "$(plan_parts 1 ev17a)" "$N"
 expect "方案核对：窗口内重复数" "$(q1 "SELECT count() - uniqExact(id, settle_ms, rev) FROM ev17a WHERE settle_ms BETWEEN $W0 AND $W1")" "0"
-expect "实际：补发进 09-18 的 50 行还剩" "$(q1 "SELECT count() FROM ev17a WHERE startsWith(id, 'r-')")" "0"
-expect "实际：同时写进 09-19 的 20 行还剩（别的分区不受影响）" "$(q1 "SELECT count() FROM ev17a WHERE startsWith(id, 's-')")" "20"
+expect "实际：补发进 03-24 的 50 行还剩" "$(q1 "SELECT count() FROM ev17a WHERE startsWith(id, 'r-')")" "0"
+expect "实际：同时写进 03-25 的 20 行还剩（别的分区不受影响）" "$(q1 "SELECT count() FROM ev17a WHERE startsWith(id, 's-')")" "20"
 for n in 1 2 3; do qn $n "SYSTEM FLUSH LOGS" >/dev/null; done
 note "事后能查到的痕迹：快照之后这个分区的 NewPart（只有写入的那个副本记 NewPart，见实验 03）"
 q1 "SELECT hostName() AS host, event_type, part_name, rows FROM clusterAllReplicas('default', system.part_log)
@@ -130,7 +130,7 @@ note "（error = 0 那个条件不能少：被块级去重拦下的重投也会�
 section "B、建临时表时连到的副本落后（少一个 part）"
 mk_load ev17b
 qn 2 "SYSTEM STOP FETCHES ev17b" >/dev/null
-note "ch2 停掉拉取，然后经 ch1 往 09-18 写 30 行：ch1/ch3 有，ch2 没有"
+note "ch2 停掉拉取，然后经 ch1 往 03-24 写 30 行：ch1/ch3 有，ch2 没有"
 extra 1 ev17b l- 30 $((DAY + 60000000))
 qn 3 "SYSTEM SYNC REPLICA ev17b" >/dev/null
 expect "建临时表之前三个副本的当天行数" "$(per_replica ev17b)" "$((N + D + 30)),$((N + D)),$((N + D + 30))"

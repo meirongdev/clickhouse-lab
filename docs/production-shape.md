@@ -147,6 +147,7 @@ SETTINGS index_granularity = 8192;
 | 项 | 生产 |
 |---|---|
 | 入口 | 只有一条：Kafka → Confluent Cloud 托管的 ClickHouse sink connector。至少一次，没开 `exactlyOnce` |
+| 插件版本 | clickhouse-kafka-connect v1.3.9，和 lab 是同一版（生产事实）。托管侧的配置里不给版本，是从 ClickHouse 那边 `system.query_log.http_user_agent` 读出来的。托管插件由云厂商升级，不会通知，引用之前先复核 |
 | 上游 | 单 topic、8 个分区，峰值每秒约 1 万条 |
 | 建块速率 | B 档每秒约 124 个块，每块十几到二十行；C 档每秒约 40 个块，每块约 90 行。都是三个副本的 `NewPart` 合起来算的 |
 | 去重窗口 | 1000 个块，B 档约 8 秒，C 档约 25 秒 |

@@ -35,6 +35,6 @@ lab 实跑 25.3.14.14，生产 25.3.14.1，源码锚点用 `v25.3.13.19-lts`。�
 接入侧同样分开：
 
 - **Kafka Connect**：lab 跑的是 Apache Kafka 3.7.0（Confluent Platform 7.7.0 的社区版镜像），源码锚点也是 `3.7.0`。生产是 Confluent Cloud 全托管的 ClickHouse sink connector（生产事实，见 `production-shape.md` 第五节），托管运行时的版本和 worker 配置看不到（待核）；lab 里凡是 worker 级的配置（`offset.flush.interval.ms` 之类）一律用 Kafka 默认值。
-- **clickhouse-kafka-connect**：lab 和源码锚点都是 `v1.3.9`，它钉的 clickhouse-java 是 `v0.9.5`。
+- **clickhouse-kafka-connect**：lab 和源码锚点都是 `v1.3.9`，它钉的 clickhouse-java 是 `v0.9.5`。生产也是 `v1.3.9`（生产事实，从 ClickHouse 侧 `query_log` 的 user agent 读到的，见 `production-shape.md` 第五节）。托管插件会被云厂商升级，引用之前先复核。
 
 `mechanism-map.md` 那张 MergeTree 默认值表的 15 项取值由实验 01 逐项断言，和源码一致。25.9 和 25.10 各动过一次去重窗口的默认值，跨版本之前先重跑实验 01。

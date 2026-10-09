@@ -6,6 +6,23 @@
 
 标注沿用 [docs/README.md](README.md#标注约定)。下面的估算都标了「推断」，跑出来的数以 `results/` 为准。
 
+## 就绪情况：交给大机器之前先看这里
+
+| 项 | 状态 |
+|---|---|
+| 目标形态：节点规格、DDL、写入、重复的形状、默认值 | 就绪，见 [production-shape.md](production-shape.md) |
+| 要回答的问题、机器、造数据、步骤、要记什么 | 就绪，见本文第二到第六节 |
+| 库引擎 | 定了：用 `Replicated` 库，和生产一致。lab 上验过能建，行为见 [production-shape.md 第一节](production-shape.md#lab-上的-replicated-库) |
+| 脚本 | 没写，清单见第八节 |
+| 生产的校准数据 | 没拉。P1 可以先跑；**P2 之前必须拿到 Aiven 改过的设置**，见 [production-shape.md 第八节](production-shape.md#八还缺的生产数据怎么只读地拿) |
+| 机器 | 没定，规格见第三节 |
+
+拿到大机器之后的顺序：
+
+1. 补齐生产的校准数据，至少拿到 setting 那几行。
+2. 写第八节的脚本，先在笔记本上用 P1 的一千万行跑通。
+3. 到大机器上从 P0 开始跑。
+
 ## 一、能带走什么，带不走什么
 
 **能带走的，是跟着数据和 SQL 走的量。** 只要表结构、行数、键的分布和生产一样，下面这些在哪台机器上量都差不多：
@@ -40,6 +57,7 @@ review 文档的假设编号是 H1–H12，这里用 S 开头：
 | S9 | 只读巡检那几条核对（按小时数多余行、看重复组）在两亿、三亿行上按小时切，单条内存能不能压在 1 GB 以内（我们只读巡检的会话就是这个上限） | B 档每小时八九百万行，C 档一千三百多万行；按 S4 的算法粗算 0.3–0.9 GB，贴着上限（推断） |
 | S10（可选） | 同时有模拟 sink 的写入时，R4 能不能拦下写进目标分区的迟到行；写入延迟怎么变（只看 lab 里的相对变化） | R4 闸；INSERT 耗时分布 |
 | S11（可选） | 目标分区在对象存储上时（用 MinIO 模拟）：快照、读取、换分区怎么走；去重后的分区落在哪块盘、会不会触发搬迁 | `disk_name`；`MovePart` 事件 |
+| S12（可选，不需要大规模） | `Replicated` 库里建表、删表要等所有副本应答。一个副本停了或者冻住时，R1 建快照表、R3 建 dedup 表、R8 删表各自怎么返回？超时返回之后，表已经在哪些副本上建好了？重试会不会撞「表已存在」？ | 停掉或冻住 ch3 的容器（同实验 12 的做法），再跑 R1、R8；看报错、三个节点的 `system.tables` 和库的复制日志 |
 
 ## 三、机器怎么选
 
@@ -62,6 +80,8 @@ review 文档的假设编号是 H1–H12，这里用 S 开头：
 全部在 ClickHouse 里用 `numbers()` 生成，不碰任何生产数据。
 
 - **表：** [production-shape.md](production-shape.md#四表) 那份 34 列的宽表 `events_wide`，8 个跳数索引全带。这份 DDL 和 `CREATE TABLE … AS` 在 lab 上建过：三个副本都有 8 个索引，克隆出来的表也是 8 个（lab 实测，写这份计划时验的）。
+- **库：** 建在 `Replicated` 库里。DDL 按 production-shape 第四节的说明，去掉 `ON CLUSTER` 和引擎参数；改过的 DDL 也在 lab 的 `Replicated` 库里建过（lab 实测）。
+- **中间表一律写 `ReplicatedMergeTree`。** dedup 表、快照表、重复键表都算。别写 `MergeTree`：生产会把它改写成复制表，lab 不会，写了就只有一个节点上有数据。
 - **可复现：** 每一列都由行号经 `cityHash64(number, 列号)` 之类的确定性函数派生，不用 `rand()`。同样的 `ROWS` 两次生成出来逐行相同，两次跑的结果才能比。`id` 用 `UUIDNumToString(sipHash128(number, …))` 生成 36 字符的 UUID 形状。
 - **时间：** `settle_ms` 在一天里均匀铺开，按小时分 24 批写入，每批一条 `INSERT … SELECT`。
 - **取值的形状：** 照 production-shape.md 第四节的那张表。低基数列按偏斜分布从小字典里取；高熵列每行不同；金额先按「大部分小额、一部分为 0」假设。
@@ -78,8 +98,8 @@ review 文档的假设编号是 H1–H12，这里用 S 开头：
 
 | 阶段 | 规模 | 副本 | 节点限额 | 回答 |
 |---|---|---|---|---|
-| P0 | — | — | — | 预检：CPU、内存、盘、Docker；容器里看到的 `max_threads`、`max_server_memory_usage` 和限额对得上；机器信息写进结果的出处行 |
-| P1 | 一千万行 | 3 | A 档 | 校准：每行字节数、压缩比、每千万行的生成耗时；把生成器调到目标。顺便把 S1–S9 在小规模上过一遍，当基线 |
+| P0 | — | — | — | 预检：CPU、内存、盘、Docker；宿主机上没有别的容器在跑（比如 `up all` 起的 Kafka 栈）；容器里看到的 `max_threads`、`max_server_memory_usage` 和限额对得上；生产改过的设置已经带上（production-shape 第八节）；`Replicated` 库的几条行为再断言一遍（production-shape 第一节那张表）；机器信息写进结果的出处行 |
+| P1 | 一千万行 | 3 | A 档 | 校准：每行字节数、压缩比、每千万行的生成耗时；把生成器调到目标。顺便把 S1–S9 在小规模上过一遍，当基线。S12 也放在这一段跑 |
 | P2 | 两亿行 | 1 | B 档 | S1–S6、S8、S9 |
 | P3 | 三亿多行 | 1 | C 档 | 同 P2，放在最紧的一档上 |
 | P4 | 两亿 / 三亿多行 | 3 | B 档 / C 档 | S5、S7，以及全副本的闸 |
@@ -130,6 +150,18 @@ R2 的段长、R3 核对的切法，各跑两种（S2、S4）。R3 默认用单�
 | `experiments/22-scale-dedup-rehearsal.sh` | opt-in，不进 `run-all` 的默认流程（同实验 13 的 `SLOW=1`）。环境变量：`ROWS`（默认一千万）、`REPLICAS`（1 或 3）、`NODE_CLASS`（`none` / `4x16` / `8x32` / `16x64`）、`DUPS`（`retry` / `redelivery` / `replay` / `all`）、`KEEP=1`（跑完不删数据） |
 | `docker-compose.scale.yml` | 给 ClickHouse 容器加 `cpus` 和 `mem_limit`；数据目录挂到 `SCALE_DATA_DIR`（放在大盘上，别放在仓库里）；可选 MinIO 和 tiered 存储策略 |
 | `cluster.sh up scale` | 带上这个 override 起集群；`REPLICAS=1` 时只起 Keeper 和 ch1 |
+| `cfg/scale-settings.xml` | 生产上 Aiven 改过的设置（production-shape 第八节的三类 `setting` 行），拿到之后照抄进来，由 `docker-compose.scale.yml` 挂进去。拿到之前这个文件为空，结果的出处行要写明「未带生产设置」 |
+
+库引擎和单副本阶段的几处细节：
+
+- **`DB_ENGINE`**：`replicated`（默认，和生产一致）或 `atomic`（对照组，沿用实验 01–21 的写法）。
+- **`DB_ENGINE=replicated` 时：**
+  - 库用 production-shape 第一节那条 `CREATE DATABASE … ENGINE = Replicated(…)` 建；
+  - 之后的建表、删表都不写 `ON CLUSTER`，引擎不带参数；
+  - 中间表不写 `MergeTree`。
+- **`REPLICAS=1` 时：**
+  - 库只在 ch1 上建，不写 `ON CLUSTER`。否则 distributed DDL 会一直等 ch2、ch3，等到超时。
+  - `lib.sh` 里的 `require_cluster`，还有所有 `clusterAllReplicas('default', …)`，都默认三个节点都在。单副本阶段要么换一份只含 ch1 的集群定义，要么在这些查询上开 `skip_unavailable_shards`（推断，写脚本时验）。
 
 实现之后的跑法：
 

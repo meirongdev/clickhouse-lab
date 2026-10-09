@@ -18,7 +18,7 @@
 |---|---|---|
 | 服务 | Aiven for ClickHouse，25.3.14.1 | 25.3.14.14，同一条 LTS |
 | 拓扑 | 1 shard × 3 replicas，每个节点存全量 | 同 |
-| 库引擎 | `Replicated`：DDL 自动传播到三个节点，不写 `ON CLUSTER`；建 `MergeTree` 会被改写成 `ReplicatedMergeTree` | `Atomic`，DDL 带 `ON CLUSTER default` 模拟 |
+| 库引擎 | `Replicated`：DDL 自动传播到三个节点，不写 `ON CLUSTER`；建 `MergeTree` 会被改写成 `ReplicatedMergeTree` | 实验 01–21、23 用 `Atomic`，DDL 带 `ON CLUSTER default` 模拟。lab 也建得出 `Replicated` 库，实验 22 用它（见下一小节） |
 | 协调 | 每个节点同机跑一个 ZooKeeper，只在集群内可达 | 单独一个 Keeper 容器 |
 | 连接 | 一个 URL，连接随机落到任一节点 | 三个端口，用 `rr` 轮流打 |
 | 存储 | 每个节点一块网络块存储，加一层对象存储（tiered storage） | 只有本地盘 |
@@ -26,6 +26,28 @@
 | 观测 | `query_log` / `part_log` 只留约 4 天；`SHOW CREATE TABLE` 被拒，`engine_full` 被抹 | 全开 |
 
 库引擎、协调、连接三行是 Aiven 文档的说法（已核，[Service architecture](https://aiven.io/docs/products/clickhouse/concepts/service-architecture)）。拓扑、备份形式、观测限制是在生产上查到的（生产事实）。
+
+### lab 上的 `Replicated` 库
+
+25.3 默认就允许建 `Replicated` 库（`allow_experimental_database_replicated` 默认是 1），不用改配置。在 lab 上这样建过一个：
+
+```sql
+CREATE DATABASE <库名> ON CLUSTER default ENGINE = Replicated('/ch/databases/<库名>', '{shard}', '{replica}')
+```
+
+下表是 lab 实测，写这份时用一次性探针验的，没有进 `experiments/`。实验 22 的 P0 要把这几条再断言一遍，写进 `results/`：
+
+| 行为 | lab 实测 | 对实验 22 意味着什么 |
+|---|---|---|
+| 表的 Keeper 路径 | 不写引擎参数时，路径取 `default_replica_path`，即 `/clickhouse/tables/{uuid}/{shard}`；副本名取 `{replica}`。生产副本的 `zookeeper_path` 也是 `/clickhouse/tables/<uuid>/<分片名>` 这个形状（生产事实，查过一套部署），说明生产就是这样不带参数建的 | 建表不写参数 |
+| 显式写引擎参数 | 第四节那条带 `ReplicatedMergeTree('/ch/tables/{uuid}/…', '{replica}')` 的 DDL 直接报错：`Code: 80 … Explicit zookeeper_path and replica_name are specified in ReplicatedMergeTree arguments`。原因是 `database_replicated_allow_replicated_engine_arguments` 默认为 0 | DDL 要去掉参数，见第四节 |
+| 建表不写 `ON CLUSTER` | 只在 ch1 上执行，三个节点上都出现，库的复制日志多一条 | 和生产一样 |
+| `CREATE TABLE … AS` | 拿到新的 uuid 路径，不会撞；8 个跳数索引和键在三个副本上都带过去了 | R1 的快照表照常建 |
+| 普通 `MergeTree` | **不会**被改写，结果是三个节点各一张、互不复制的 `MergeTree`。Aiven 文档说生产上会被改写成 `ReplicatedMergeTree`（已核，同上一页），所以这是托管层的行为，不是 ClickHouse 本身的 | lab 里一律显式写 `ReplicatedMergeTree`，否则中间表只有一个节点上有数据 |
+| `ATTACH PARTITION … FROM` / `REPLACE PARTITION` | 不进库的复制日志（前后条数不变），只在发起的节点上执行（`query_log` 里只有 ch1 有这两条），另外两个副本靠表自己的复制拿到数据 | 和 `Atomic` 库一样，实验 17 关于 `alter_sync` 的结论照样成立 |
+| `DROP TABLE` 不带 `SYNC` | 三个节点的 `system.dropped_tables` 里都有，延迟删除和 `Atomic` 库一样 | 实验 07、13 的结论照样成立 |
+
+还没验的（推断）：`Replicated` 库里的 DDL 默认要等所有副本应答。某个副本停了或者转了只读，建表会一直等到超时才返回，但活着的副本上表已经建好了，这时候重试会撞上「表已存在」。这一条不需要大规模，小规模就能验，见计划的 S12。
 
 ## 二、节点规格和数据量
 
@@ -113,6 +135,11 @@ PRIMARY KEY (settle_ms, id)
 SETTINGS index_granularity = 8192;
 ```
 
+- **库引擎。** 上面是 `Atomic` 库的写法，实验 01–21 都按这个约定写。实验 22 在 `Replicated` 库里建表，要改两处：
+  - 去掉 `ON CLUSTER default`；
+  - 引擎写成不带参数的 `ENGINE = ReplicatedMergeTree`。
+
+  改过的 DDL 和 `CREATE TABLE … AS` 都在 lab 的 `Replicated` 库里建过：三个副本上各有 8 个索引，键和上面一致（lab 实测，同第一节那一小节）。
 - **键**是在生产 `system.tables` 里查到的（生产事实）：按结算日分区，排序键以结算时间开头，没有 TTL。生产上还有 `storage_policy = 'tiered'`，lab 没有这个策略，实验 22 的 P6 阶段挂 MinIO 时才加。
 - **列和跳数索引**来自一份旧的建表语句。那份语句的排序键是旧的，还带一个 3 个月的 TTL，跟现在的表对不上，所以列和索引后来有没有变还要核（待核，见第八节）。
 - **索引一个都不能少。** REPLACE PARTITION 要求临时表和原表的结构、键、存储策略一致，并且包含原表的全部索引（已核，[ALTER … PARTITION](https://clickhouse.com/docs/sql-reference/statements/alter/partition#replace-partition)）。`CREATE TABLE … AS` 会把索引一起带过去，所以造数据时 8 个跳数索引都得建上。bloom_filter 还会加重写入和 merge 的负担。
@@ -183,6 +210,18 @@ SETTINGS index_granularity = 8192;
 | `replicated_deduplication_window` | 1000 个块 | 第五节的去重窗口 |
 
 ## 八、还缺的生产数据，怎么只读地拿
+
+截至写这份时，下面这些一项都还没从生产拉过。它们挡的是不同的阶段（阶段编号见[计划](plan-scale-dedup.md#五步骤)）：
+
+| 缺的 | 对应 SQL 里的哪几段 | 挡哪一步 |
+|---|---|---|
+| Aiven 改过的设置 | 三类 `setting` | **P2 之前必须拿到。** 第七节那些默认值决定内存上限、什么时候落盘、`DROP` 的限额、part 数的阈值。生产改过哪一项，lab 就照着改哪一项，否则量出来的数推不到生产 |
+| 现表的列和跳数索引 | `column`、`skip_index` | P1 之前最好拿到。第四节的 DDL 来自一份旧语句，有出入就要先改 DDL，不然校准白做 |
+| 逐列压缩字节 | `part_column` | P1 的校准。没有它就只能对齐整行的 120–150 字节 |
+| 沉淀后的日分区形状 | `part` | P1 末尾对比 part 数和大小 |
+| 存储策略和盘余量 | `policy`、`disk` | P6，以及执行前估算盘够不够 |
+
+所以 P1 可以先跑，只对齐整行的目标；P2 之前一定要补上 setting 那几行。
 
 下面这条只查 `system.*`，不读表数据，在生产上跑的代价很小。拿到结果先填进私有仓库的对照表，脱敏后再回填这一份（只写量级）。占位符：`{db}`、`{table}`，以及 `{D}`（一个已经沉淀下来的日分区 ID）。
 

@@ -157,6 +157,9 @@ lab 里的表名、列名见实验 19。给生产的版本只换了库名、表�
 ## 本地复现不了的（待一手观察）
 
 - **Aiven 的 Replicated 库。** `CREATE TABLE … AS` 拿到的 Keeper 路径取决于生产原表的 `zookeeper_path` 带不带 `{uuid}`。实验 04 的结论是：带 `{uuid}` 就建得出来，写成字面量则当场报 `REPLICA_ALREADY_EXISTS`。生产执行前要看 `system.replicas`。
+  - 查过的那一套部署，路径是带 uuid 的（生产事实）。它的形状和 `Replicated` 库不写引擎参数时的默认路径一样。
+  - lab 在 `Replicated` 库里验过 `CREATE TABLE … AS` 拿到的是新路径，见 [production-shape.md 第一节](production-shape.md#lab-上的-replicated-库)。
+  - 其余几套部署还是要先查。
 - **tiered storage。** 本地盘上 `ATTACH PARTITION … FROM` 和 `REPLACE PARTITION` 都走硬链接（实验 20）。如果那天的 part 已经在对象存储上，走的是远端元数据，lab 没挂 S3，没验过。
 - **生产规模的耗时。** lab 当天只有 10 万行，R3 和 R5 的耗时差看不出来；生产一千多万行时，时间应该主要花在 R3（推断）。按生产量级跑一遍的计划见 [plan-scale-dedup.md](plan-scale-dedup.md)（待建实验 22）。那边能量出来的是内存、磁盘和 part 数，绝对耗时仍然带不到生产。
 

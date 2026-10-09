@@ -50,6 +50,7 @@ bash experiments/02-dedup-window-overflow.sh
 | 版本 | 钉到 `25.3.14.14@sha256:b627d7a9…`（tag + digest） |
 | 拓扑 | 1 keeper + 3 clickhouse-server，1 shard × 3 replicas |
 | cluster 名 | `default` |
+| 库引擎 | 实验 01–21、23 用默认的 `Atomic` 库，DDL 带 `ON CLUSTER default`；生产是 `Replicated` 库。待建实验 22 改用 `Replicated` 库，两种库的差别见 `docs/production-shape.md` 第一节 |
 | Keeper | 单节点，同样钉到 `25.3.14.14@sha256:2c8b97bb…` |
 | HTTP 端口 | ch1 `18123`、ch2 `18124`、ch3 `18125` |
 | Kafka 栈（`up all`） | Confluent Platform 7.7.0 的社区版镜像（内置 Apache Kafka 3.7.0），同样钉 tag + digest；单 broker；Connect 的 REST 在 `8083` |

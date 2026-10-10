@@ -57,10 +57,10 @@ START_TIME=$(date +%s)
 q1 "
 INSERT INTO events_raw (event_time, device_id, event_type, metric_val)
 SELECT
-    now() - toIntervalSecond(rand() % 259200),
-    'device_' || toString(rand() % 100000),
-    ['click', 'view', 'purchase'][1 + rand() % 3],
-    rand() % 100
+    now() - toIntervalSecond(rand(1) % 259200),
+    'device_' || toString(rand(2) % 100000),
+    ['click', 'view', 'purchase'][1 + rand(3) % 3],
+    rand(4) % 100
 FROM numbers($ROWS)
 " >/dev/null
 END_TIME=$(date +%s)

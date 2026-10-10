@@ -51,22 +51,25 @@ expect() {
   else printf '  [不符] %s：实际 %s，期望 %s\n' "$1" "$2" "$3"; FAILED=1; fi
 }
 
-# wait_znodes <路径> <目标数量> <超时秒>  轮询 Keeper 里某个路径下的子节点数
+# wait_znodes <路径> <目标数量> <超时秒>  轮询 Keeper 里某个路径下的子节点数，降到目标数量以下才返回
 # blocks/ 的裁剪由 ReplicatedMergeTreeCleanupThread 周期性做，不是插入时立刻做，
-# 所以判断「窗口是否已经把旧块顶出去」只能轮询，不能靠插入计数推断。
+# 所以判断「窗口是否已经把旧块顶出去」只能轮询，不能靠插入计数推断。只在结束时打一行结果。
 wait_znodes() {
-  local path=$1 target=$2 timeout=${3:-120} t=0 n
+  local path=$1 target=$2 timeout=${3:-120} t=0 n first=""
   while [ "$t" -lt "$timeout" ]; do
     n=$(q1 "SELECT count() FROM system.zookeeper WHERE path='$path'")
     if ! is_num "$n"; then
       printf '  查 znode 数失败，服务端返回：%s\n' "$(printf '%s' "$n" | head -1)"
       return 1
     fi
-    printf '  t=%-4s znode=%s\n' "${t}s" "$n"
-    [ "$n" -le "$target" ] && return 0
+    first=${first:-$n}
+    if [ "$n" -le "$target" ]; then
+      printf '  znode 从 %s 个降到 %s 个，等了约 %ss（5 秒轮询一次）\n' "$first" "$n" "$t"
+      return 0
+    fi
     sleep 5; t=$((t+5))
   done
-  printf '  等了 %ss 仍未降到 %s\n' "$timeout" "$target"; return 1
+  printf '  等了 %ss，znode 还是 %s 个，没降到 %s\n' "$timeout" "$n" "$target"; return 1
 }
 
 # wait_mutation <表名> <超时秒>  等这张表上的 mutation 全部 is_done。

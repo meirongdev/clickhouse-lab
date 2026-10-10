@@ -24,7 +24,7 @@ FAILED=0
 
 section "库引擎和延迟删除的配置"
 q1 "SELECT name, engine FROM system.databases WHERE name = currentDatabase() FORMAT TSVWithNames"
-q1 "SELECT name, value, description FROM system.server_settings WHERE name='database_atomic_delay_before_drop_table_sec' FORMAT TSVWithNames"
+q1 "SELECT name, value FROM system.server_settings WHERE name='database_atomic_delay_before_drop_table_sec' FORMAT TSVWithNames"
 
 # 这个实验会故意在 Keeper 里留下孤儿副本（那正是它要演示的东西），
 # 延迟期 480 秒内重跑会撞上。开头先用 SYSTEM DROP REPLICA 清干净。

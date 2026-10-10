@@ -39,43 +39,52 @@ title() {
   esac
 }
 
-block=$(mktemp); mach=$(mktemp); trap 'rm -f "$block" "$mach"' EXIT
-n=0; pass=0; total_ok=0; total_bad=0
+block=$(mktemp); rows=$(mktemp); trap 'rm -f "$block" "$rows"' EXIT
+# 每份日志一行：编号、标题、符合、不符、退出码、跑于、lab、SLOW、机器（后四项取自第一行的出处）
+for f in results/*.log; do
+  num=$(basename "$f" | cut -c1-2)
+  head1=$(head -1 "$f")
+  when=$(printf '%s' "$head1" | sed -n 's/^# 跑于 \([0-9-]* [0-9:]*\).*/\1/p')
+  rev=$(printf '%s' "$head1" | sed -n 's/.*| lab \([^ |]*\).*/\1/p')
+  slow=$(printf '%s' "$head1" | grep -q 'SLOW=1' && echo 'SLOW=1' || echo '没带 SLOW=1')
+  m=$(printf '%s' "$head1" | sed -n 's/.*| 机器 \([^|]*[^ |]\).*/\1/p')
+  ok=$(grep -c '\[符合\]' "$f" || true); bad=$(grep -c '\[不符\]' "$f" || true)
+  code=$(tail -1 "$f" | sed -n 's/^# 退出码 //p')
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$num" "$(title "$num")" "$ok" "$bad" "${code:-没记}" \
+    "${when:-?}" "\`${rev:-?}\`" "$slow" "${m:-没记}" >> "$rows"
+done
+# 出处里各份日志都一样的项合成一行写在表上面；不一样的按取值分组，列出各自是哪几个实验
 {
   echo "$BEGIN"
   echo
-  echo "| # | 验的是什么 | 符合 | 不符 | 退出码 | 跑于 | lab | SLOW |"
-  echo "|---|---|---|---|---|---|---|---|"
-  for f in results/*.log; do
-    num=$(basename "$f" | cut -c1-2)
-    head1=$(head -1 "$f")
-    when=$(printf '%s' "$head1" | sed -n 's/^# 跑于 \([0-9-]* [0-9:]*\).*/\1/p')
-    rev=$(printf '%s' "$head1" | sed -n 's/.*| lab \([^ |]*\).*/\1/p')
-    slow=$(printf '%s' "$head1" | grep -q 'SLOW=1' && echo 是 || echo 否)
-    ok=$(grep -c '\[符合\]' "$f" || true); bad=$(grep -c '\[不符\]' "$f" || true)
-    code=$(tail -1 "$f" | sed -n 's/^# 退出码 //p'); code=${code:-没记}
-    m=$(printf '%s' "$head1" | sed -n 's/.*| 机器 \([^|]*[^ |]\).*/\1/p')
-    printf '%s\t%s\n' "${m:-没记}" "$num" >> "$mach"
-    echo "| $num | $(title "$num") | $ok | $bad | $code | ${when:-?} | \`${rev:-?}\` | $slow |"
-    n=$((n + 1)); total_ok=$((total_ok + ok)); total_bad=$((total_bad + bad))
-    [ "$code" = 0 ] && [ "$bad" = 0 ] && pass=$((pass + 1))
-  done
-  echo
-  echo "$n 个实验，$pass 个退出码为 0 且没有不符；断言合计 $total_ok 条符合、$total_bad 条不符。"
-  echo "「退出码」是 run-all.sh 记在每份日志最后一行的；「没记」说明这份日志不是 run-all.sh 跑出来的，或者跑到一半断了。"
-  echo
-  # 机器取自每份日志第一行的出处。耗时、核数这类数字只在同一台机器的日志之间能比
   awk -F'\t' '
-    !($1 in cnt) { order[++k] = $1 }
-    { cnt[$1]++; ids[$1] = ids[$1] (ids[$1] == "" ? "" : "、") $2 }
+    function same(c,    i, k, seen, order, ids, out) {
+      for (i = 1; i <= n; i++) {
+        if (!((c, v[i, c]) in seen)) { order[++k] = v[i, c]; seen[c, v[i, c]] = 1 }
+        ids[v[i, c]] = ids[v[i, c]] (ids[v[i, c]] == "" ? "" : "、") v[i, 1]
+      }
+      if (k == 1) return order[1]
+      for (i = 1; i <= k; i++) out = out (i > 1 ? "；" : "") order[i] "（实验 " ids[order[i]] "）"
+      return out
+    }
+    {
+      n++; for (c = 1; c <= NF; c++) v[n, c] = $c
+      ok += $3; bad += $4; if ($5 == "0" && $4 == "0") pass++
+      if (first == "" || $6 < first) first = $6
+      if ($6 > last) last = $6
+    }
     END {
-      if (k == 1) printf "机器：%s（全部 %d 份日志）。\n", order[1], cnt[order[1]]
-      else for (i = 1; i <= k; i++) printf "机器：%s（实验 %s）。\n", order[i], ids[order[i]]
-      print "「机器」取自每份日志的出处行，「没记」是出处行加上这一项之前跑的。耗时、用了几个核这类数字只在同一台机器的日志之间能比。"
-    }' "$mach"
+      printf "出处：%s 到 %s 跑的；lab %s；%s；机器 %s。\n\n", first, last, same(7), same(8), same(9)
+      print "| # | 验的是什么 | 符合 | 不符 | 退出码 |"
+      print "|---|---|---|---|---|"
+      for (i = 1; i <= n; i++) printf "| %s | %s | %s | %s | %s |\n", v[i, 1], v[i, 2], v[i, 3], v[i, 4], v[i, 5]
+      printf "\n%d 个实验，%d 个退出码为 0 且没有不符；断言合计 %d 条符合、%d 条不符。\n", n, pass, ok, bad
+      print "出处取自每份日志的第一行，退出码取自最后一行（run-all.sh 写的，「没记」说明不是它跑的或者跑到一半断了）。耗时、用了几个核这类数字只在同一台机器的日志之间能比。"
+    }' "$rows"
   echo
   echo "$END"
 } > "$block"
+n=$(wc -l < "$rows" | tr -d ' '); pass=$(awk -F'\t' '$5 == "0" && $4 == "0"' "$rows" | wc -l | tr -d ' ')
 
 awk -v b="$BEGIN" -v e="$END" -v f="$block" '
   $0 == b { while ((getline line < f) > 0) print line; skip = 1; next }

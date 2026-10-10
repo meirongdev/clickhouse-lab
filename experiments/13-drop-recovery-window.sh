@@ -202,7 +202,6 @@ else
     dt=$(q1 "SELECT count() FROM system.dropped_tables WHERE database = currentDatabase() AND table = 'expiry_probe'" | tr -d '\n')
     [ -z "$gone_zk" ] && [ "$zn" = "0" ] && gone_zk=$t
     [ -z "$gone_dt" ] && [ "$dt" = "0" ] && gone_dt=$t
-    [ $((t % 60)) -lt 10 ] || [ -n "$gone_zk$gone_dt" ] && printf '  t=%-5s Keeper 里的副本=%s  dropped_tables=%s\n' "${t}s" "$zn" "$dt"
     [ -n "$gone_zk" ] && [ -n "$gone_dt" ] && break
     sleep 10
   done

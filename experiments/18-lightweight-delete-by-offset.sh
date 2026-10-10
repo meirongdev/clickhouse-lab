@@ -107,7 +107,7 @@ add_days 1 60
 q1 "INSERT INTO $T SELECT concat('k', toString(number)), $W0 + number * 20, 0, toDateTime64('2026-03-24 10:00:00', 3, 'UTC'), 'x'
     FROM numbers($WIN)"
 add_dups
-note "active part 数：$(parts)"
+P_FIRST=$(parts); note "active part 数：$P_FIRST"
 
 section "一、方法一原文"
 out=$(q1 "DELETE FROM $T WHERE (_part, _part_offset) IN ($SUBQ)")
@@ -119,7 +119,7 @@ esac
 
 section "二、放开 allow_nondeterministic_mutations，不限分区"
 run_delete "DELETE FROM $T WHERE (_part, _part_offset) IN ($SUBQ) SETTINGS allow_nondeterministic_mutations = 1"
-R62=$RATIO
+R_FIRST=$RATIO
 expect "三个副本当天行数" "$(q1 "SELECT arrayStringConcat(groupArray(toString(c)), ',') FROM (SELECT hostName() h, count() c
          FROM clusterAllReplicas('default', currentDatabase(), $T) WHERE _partition_id = '$PID' GROUP BY h ORDER BY h)")" "$WIN,$WIN,$WIN"
 expect "留下的是 create_time 最早的那份（晚 5 秒的副本还剩）" "$(q1 "SELECT count() FROM $T WHERE v = 'dup'")" "0"
@@ -127,15 +127,15 @@ expect "别的分区的 60 个 part 全都出了一个新版本" "$MUTATED_OTHER
 expect "只有新写进来那 3 份重复所在的 1 个 part 真写了 _row_exists" "$((MUTATED - UNTOUCHED))" "1"
 expect "克隆写盘字节数" "$UNTOUCHED_BYTES" "0"
 note "所以全表 part 数的代价不在写盘，在读：判断每个 part 命没命中，都要把子查询再跑一遍"
-expect "子查询读了不止一遍（窗口遍数 > 10）" "$(python3 -c "print(int($R62 > 10))")" "1"
+expect "子查询读了不止一遍（窗口遍数 > 10）" "$(python3 -c "print(int($R_FIRST > 10))")" "1"
 
 note "再补 60 个日分区（part 数翻倍），同一条 DELETE 再跑一次"
 add_days 61 60; add_dups
-note "active part 数：$(parts)"
+P_DOUBLED=$(parts); note "active part 数：$P_DOUBLED"
 run_delete "DELETE FROM $T WHERE (_part, _part_offset) IN ($SUBQ) SETTINGS allow_nondeterministic_mutations = 1"
-R122=$RATIO
-note "part 数 62 → 122，读窗口的遍数 $R62 → $R122"
-expect "遍数跟着全表 part 数近似翻倍（比值在 1.6–2.4 之间）" "$(python3 -c "print(int(1.6 < $R122 / $R62 < 2.4))")" "1"
+R_DOUBLED=$RATIO
+note "part 数 $P_FIRST → ${P_DOUBLED}，读窗口的遍数 $R_FIRST → $R_DOUBLED"
+expect "遍数跟着全表 part 数近似翻倍（比值在 1.6–2.4 之间）" "$(python3 -c "print(int(1.6 < $R_DOUBLED / $R_FIRST < 2.4))")" "1"
 note "外层再加 settle_ms 的范围条件也没用：mutation 不按 WHERE 裁 part，照样每个 part 过一遍"
 add_dups
 run_delete "DELETE FROM $T WHERE settle_ms BETWEEN $W0 AND $W1 AND (_part, _part_offset) IN ($SUBQ)

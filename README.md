@@ -53,7 +53,7 @@ bash experiments/02-dedup-window-overflow.sh
 
 - 镜像那一项读的是 ch1 容器实际用的引用，和 compose 里钉的那行是同一个 digest。两份 log 能不能拿来对比，先看这一项。
 - `lab` 后面是 git rev。带「+改动」表示跑的时候脚本或配置有没提交的修改，这时 rev 指的那一版不是实际跑的那一版。
-- `机器` 是宿主机的 CPU、核数、内存，加上 Docker 虚拟机分到的 CPU 和内存。耗时、用了几个核这类数字只在同一台机器的 log 之间能比；`report.sh` 会在汇总表下面列出每份 log 是哪台机器跑的。
+- `机器` 是宿主机的 CPU、核数、内存，加上 Docker 虚拟机分到的 CPU 和内存。耗时、用了几个核这类数字只在同一台机器的 log 之间能比；`report.sh` 把各份 log 一样的出处合成一行写在汇总表上方，不一样的按取值列出各自是哪几个实验。
 - `SLOW=1` 表示慢速段跑过了；没有这一项的 log 里就没有那几段的证据。提交 `results/` 之前用 `SLOW=1 ./run-all.sh`。
 - 实验 09、21、23 还有第二行，记 Kafka Connect 和 connector 插件的版本。
 - `run-all.sh` 在每份 log 最后追加一行 `# 退出码 N`。没有这一行的 log 不是 `run-all.sh` 跑出来的，或者跑到一半断了。

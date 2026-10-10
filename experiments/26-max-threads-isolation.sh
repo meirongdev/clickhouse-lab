@@ -129,7 +129,6 @@ for r in $(seq 1 "$ROUNDS"); do
   for shape in settled unsettled scan; do
     phase "$shape-auto/$r" "$shape" 0; phase "$shape-mt2/$r" "$shape" 2; phase "$shape-mt1/$r" "$shape" 1
   done
-  note "第 $r 轮跑完"
 done
 q1 "SYSTEM FLUSH LOGS" >/dev/null
 

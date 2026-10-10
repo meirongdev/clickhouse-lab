@@ -30,3 +30,5 @@
   > 标准的生产应急 Runbook：演示如何在极度污染的情况下，利用底层的硬链接特性 (`ATTACH / REPLACE PARTITION`) 实现 PB 级数据的秒级全量回滚。
 * [**生产级高可用：异常处理、资源隔离与硬件容量规划 (ops-resilience-scaling.md)**](./ops-resilience-scaling.md)
   > **实操必备！** 详细记录了如何应对数据修改、补数、迟到等四大异常，如何利用 `max_threads` 完美隔离在线读写与离线补数的 CPU 争抢，以及未来日吞吐量跃升至 10 亿 (1 Billion) 时的底层硬件规划准则。
+* [**全链路核心监控与告警基线指标 (observability-metrics.md)**](./observability-metrics.md)
+  > **监控搭建指南！** 系统性梳理了 Kafka 摄入层与 ClickHouse 引擎层必须配置的 P1/P2 级告警指标，防范碎文件风暴、OOM 以及数据拥堵雪崩。

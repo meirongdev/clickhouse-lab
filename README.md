@@ -1,16 +1,34 @@
-# ClickHouse Lab (架构实战与极限机制压测台)
+# ClickHouse Lab: 从原理到百亿级实战的渐进指南
 
-本仓库是 ClickHouse 在海量数据（百亿级/PB级）写入、去重、备份恢复及 Kafka 集成场景下的架构实战与压测台。
-这里不仅包含数十个自动化运行的极限测试脚本，更沉淀了大量从生产痛点中提取的核心最佳实践。
+本仓库不仅是一个包含 25 个极限压测脚本的实验室，更是一部**层层递进的 ClickHouse 架构实战白皮书**。
+我们以“如何扛住日均 3 亿笔交易数据的摄入与实时报表”为核心命题，在全托管云环境（Aiven ClickHouse + Confluent Kafka）中，为您铺开一条从“踩坑”到“精通”的最佳实践之路。
 
-## 📚 文档与最佳实践导航 (Documentation & Best Practices)
-所有的架构法则与文档体系已在 `docs/` 目录下精心重构，建议优先阅读：
+## 🗺️ 渐进式阅读指南 (Progressive Reading Path)
 
-- 🌟 [**ClickHouse 百亿级核心最佳实践 (精简版)**](docs/best-practices-billion-rows.md) — 涵盖超大批次写入、`ReplacingMergeTree` 与 `FINAL` 去重、物化视图长期报表存储、S3 冷热数据归档、以及 Kafka Connect Sink 的极限调优法则。
-- 🗺️ [**全量文档导航图 (Docs Index)**](docs/README.md) — 涵盖所有机制映射表、生产恢复 Runbook、以及历史背景。
-- 📊 [**全量本地压测报告**](docs/Test-Report.md) — 全部 25 个自动化实验在最新 25.3 版本下的实测结果输出。
+为了让您轻松理解整套系统的设计理念，请按以下四大阶段顺畅阅读：
 
-## 🚀 跑起来 (How to run)
+### 阶段一：业务挑战与痛点起因 (The Challenge)
+*为什么常规的大数据架构会在 ClickHouse 面前折戟沉沙？*
+* [**生产环境原始业务形态**](docs/production-shape.md)：了解我们的初始规模（数亿交易、严格去重需求）以及遭遇的性能瓶颈。
+* [**海量数据规模规划**](docs/plan-scale-dedup.md)：面对极高并发时的资源预估与初始踩坑记录。
+
+### 阶段二：底层机制与原理解构 (Deconstructing Mechanics)
+*ClickHouse 到底是怎么运作的？不要靠猜，看实测数据。*
+* [**MergeTree 机制映射与默认参数全览**](docs/mechanism-map.md)：带你透视 ClickHouse 源码，理解去重窗口、Merge 裁剪周期等生死攸关的参数。
+* [**自动化极限实验库 (Experiments)**](experiments/)：包含 25 个自动化脚本，亲眼见证并发换分区、宕机断网、脏数据注入时引擎的真实反应。
+
+### 阶段三：破局之道与最佳实践 (The Golden Architecture) 🌟 [核心]
+*结合原理，我们推导出了支撑百亿规模的极简终极架构。*
+* [**ClickHouse 百亿级核心最佳实践 (精简版)**](docs/best-practices-billion-rows.md)：**强烈推荐阅读！** 总结了 5 大核心法则，包含 `ReplacingMergeTree + FINAL` 强一致去重、显式物化视图预聚合、S3 冷热分层，以及对 Kafka Sink 的极限攒批限流调优。
+
+### 阶段四：实战跑测与运维兜底 (Operations & Runbooks)
+*落地到生产，如何证明它可行？出了事怎么救？*
+* [**全量本地压测验证报告 (Test Report)**](docs/Test-Report.md)：在当前环境实跑 25 个实验的完整功能验证报告，用数据证明架构的稳健。
+* [**去重与副本修复方案 (Runbook)**](docs/dedup-solution.md)：当遇到无可挽回的数据污染时，如何利用底层硬链接特性（`ATTACH/REPLACE PARTITION`）做到秒级无损回滚。
+
+---
+
+## 🚀 本地实验室跑起来 (How to run locally)
 
 ```bash
 ./cluster.sh up        # 只起 ClickHouse（1 keeper + 3 副本）。除 09、21、23 之外的实验只要这个

@@ -1,27 +1,28 @@
-# ClickHouse Lab 文档导航 (Documentation Index)
+# ClickHouse 架构实战与文档导航 
 
-欢迎来到 ClickHouse Lab 文档中心。这里的文档经过精心重构与分类，不仅包含底层的机制分析，还沉淀了支撑百亿级数据吞吐的生产架构核心法则。
+本目录包含了支持本架构在生产环境平稳运行的所有核心文档。
+为了帮助您从理解痛点到掌握架构方案，我们对文档进行了层层递进的整理，请按以下路径顺畅阅读：
 
-## 📚 核心架构与最佳实践 (Core Architecture & Best Practices)
-这是本库最核心的技术结晶，推荐所有 ClickHouse 开发者优先阅读：
-* [**百亿级核心最佳实践 (精简版)**](./best-practices-billion-rows.md)
-  > 涵盖了超大批次写入、`ReplacingMergeTree` 与 `FINAL` 去重、物化视图长期报表存储、S3 冷热数据归档、以及 Kafka Connect Sink 的极限调优法则。
+## 第一卷：发现挑战 (The Challenge)
+所有的优秀架构都脱胎于棘手的业务痛点。
+* [**生产环境原始业务形态 (production-shape.md)**](./production-shape.md)
+  > 了解真实场景：每日摄入数亿条包含重复风险的交易记录，传统的精确去重遇到了何种灾难级的性能瓶颈。
+* [**海量数据规模规划 (plan-scale-dedup.md)**](./plan-scale-dedup.md)
+  > 记录了从百万级跨入亿级吞吐量时，我们对并发量、分区数以及内存的理论推演与初期探索。
 
-## 🔬 测试与验证报告 (Test & Validation Reports)
-本地与 CI 环境运行全量实验后自动生成的压测与功能验证报告：
-* [**最新测试报告 (Test Report)**](./Test-Report.md)
-  > 包含了所有 25 个极限实验场景（如断网重投、节点宕机、并发换分区等）在当前机器运行的完整验证结论。
+## 第二卷：探究机制 (Mechanisms & Theory)
+在设计最终方案前，我们先通过一系列“拆解”实验，摸透了 ClickHouse 的脾气。
+* [**MergeTree 底层参数与机制映射表 (mechanism-map.md)**](./mechanism-map.md)
+  > 深入源码级配置，剖析为什么默认的块级去重窗口只有 8 秒，以及 Zookeeper 副本同步的心跳规律。
 
-## 📖 机制深度解析 (Deep Dives & Mechanisms)
-如果您遇到底层原理问题，或需要制定运维 Runbook：
-* [**MergeTree 底层参数与机制映射表**](./mechanism-map.md)
-  > 记录了 ClickHouse 源码中关于去重窗口、Merge 裁剪周期等重要默认参数及实测表现。
-* [**去重与副本修复方案 (Runbook)**](./dedup-solution.md)
-  > 详述了如何在数据污染后，利用 `ATTACH/REPLACE PARTITION` 进行无感硬链接级别的修复与回滚。
+## 第三卷：终极解法与最佳实践 (The Golden Architecture) 🌟
+建立在前面的痛点和机制之上，我们最终得出的极简且无可动摇的企业级架构。
+* [**ClickHouse 百亿级核心最佳实践 (best-practices-billion-rows.md)**](./best-practices-billion-rows.md)
+  > **核心必读文件！** 总结为 5 大硬核法则：彻底放弃写入时去重拥抱 `ReplacingMergeTree`、显式构建物化视图管道、全面改用月分区、冷热数据 S3 分层、以及 Kafka Connect Sink 容忍错误的极限限流配置。
 
-## 📝 背景与规划 (Background & Planning)
-本项目的初衷与未来演进路线：
-* [**生产环境原始业务形态**](./production-shape.md)
-  > 记录了促使我们建立此 Lab 的原始生产挑战（每日上亿行交易数据去重问题）。
-* [**海量数据规模规划**](./plan-scale-dedup.md)
-  > 关于提升数据量级，向 5 亿、10 亿规模压测的远景规划记录。
+## 第四卷：验证与兜底兜底 (Validation & Runbooks)
+空谈架构是不够的，必须要有坚实的数据跑测和出事后的回滚方案。
+* [**全量本地压测报告 (Test Report)**](./Test-Report.md)
+  > 涵盖了库中全部 25 个故障注入与功能验证脚本在当前环境的通过情况，确保架构不仅“理论可行”还能“实操不崩”。
+* [**去重与副本修复方案 (dedup-solution.md)**](./dedup-solution.md)
+  > 标准的生产应急 Runbook：演示如何在极度污染的情况下，利用底层的硬链接特性 (`ATTACH / REPLACE PARTITION`) 实现 PB 级数据的秒级全量回滚。

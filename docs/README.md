@@ -19,6 +19,8 @@
 建立在前面的痛点和机制之上，我们最终得出的极简且无可动摇的企业级架构。
 * [**ClickHouse 百亿级核心最佳实践 (best-practices-billion-rows.md)**](./best-practices-billion-rows.md)
   > **核心必读文件！** 总结为 5 大硬核法则：彻底放弃写入时去重拥抱 `ReplacingMergeTree`、显式构建物化视图管道、全面改用月分区、冷热数据 S3 分层、以及 Kafka Connect Sink 容忍错误的极限限流配置。
+* [**实战场景：海量数据下的多级报表与动态时区上卷 (architecture-case-rollup-tradeoffs.md)**](./architecture-case-rollup-tradeoffs.md)
+  > 深度对比了业内顶尖公司（PostHog, Cloudflare 等）的 2023-2026 最新流式架构，论证了使用单一 Base-Time-Bucket（如半小时基表）代替传统级联物化视图在性能、成本与应对全球化时区动态计算上的降维优势。
 
 ## 第四卷：验证与兜底兜底 (Validation & Runbooks)
 空谈架构是不够的，必须要有坚实的数据跑测和出事后的回滚方案。

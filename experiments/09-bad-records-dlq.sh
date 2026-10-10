@@ -96,7 +96,7 @@ sleep 15
 expect "task 停了之后再来的 8 条正常记录，15 秒后一条都没进 ClickHouse" "$(rows lab09_none "WHERE startsWith(id, 'late')")" "0"
 LAG=$(docker exec "$KAFKA_CONTAINER" kafka-consumer-groups --bootstrap-server localhost:9092 --describe --group connect-lab09-none 2>/dev/null \
       | awk '$2 == "lab09_none" && $6 ~ /^[0-9]+$/ {s += $6} END {print s + 0}')
-note "这时消费组在这个 topic 上的 lag 合计：$LAG（坏记录 1 条 + 后来的 8 条，再加上和坏记录同批、没来得及提交的那几条）"
+note "这时消费组在这个 topic 上的 lag 合计：${LAG}（坏记录 1 条 + 后来的 8 条，再加上和坏记录同批、没来得及提交的那几条）"
 expect "lag 至少是 9（数据都还在 Kafka 里，没丢，只是没进来，1 = 是）" "$([ "$LAG" -ge 9 ] && echo 1 || echo 0)" "1"
 curl -s -m 10 -X POST "$CONNECT/connectors/lab09-none/tasks/0/restart" >/dev/null
 sleep 3
@@ -133,7 +133,7 @@ SRC=$(docker exec "$KAFKA_CONTAINER" kafka-console-consumer --bootstrap-server l
 P_BAD=$(printf '%s\n' "$SRC" | grep '"b-bad"' | sed -n 's/^Partition:\([0-9]*\).*/\1/p')
 N_SAME=$(printf '%s\n' "$SRC" | grep -c "^Partition:$P_BAD	")
 N_ALL=$(printf '%s\n' "$SRC" | grep -c .)
-note "这一批 $N_ALL 条，坏记录在分区 $P_BAD，和它同分区的（含它自己）有 $N_SAME 条"
+note "这一批 $N_ALL 条，坏记录在分区 ${P_BAD}，和它同分区的（含它自己）有 $N_SAME 条"
 DLQ=$(consume_values lab09_dead 8000)
 N_DLQ=$(printf '%s\n' "$DLQ" | grep -c '"b-')
 expect "task 仍是 RUNNING（没停）" "$(task_state lab09-dlq)" "RUNNING"
@@ -180,3 +180,5 @@ note "这一批只剩源 topic 里那一份，过了 Kafka 的保留期就没了
 
 cleanup
 exit $FAILED
+#   - ClickHouse Official Documentation (2025/2026)
+#     https://clickhouse.com/docs/en/

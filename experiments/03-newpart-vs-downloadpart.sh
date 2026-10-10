@@ -74,3 +74,5 @@ note "所以拿 NewPart 算建块速率要加 error = 0；反过来，数 error 
 
 q1 "DROP TABLE IF EXISTS events_partlog ON CLUSTER default SYNC" >/dev/null
 exit $FAILED
+#   - ClickHouse Official Documentation (2025/2026)
+#     https://clickhouse.com/docs/en/

@@ -68,3 +68,5 @@ note "cleanup_delay_period 在源码里的描述是「Minimum period」：裁剪
 note "30 秒是下限、300 秒是上限，中间按上一轮清掉多少东西伸缩（实验 02）。"
 
 exit $FAILED
+#   - ClickHouse Official Documentation (2025/2026)
+#     https://clickhouse.com/docs/en/

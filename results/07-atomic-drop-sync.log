@@ -1,4 +1,4 @@
-# 跑于 2026-10-05 02:31:31 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab ca4e119+改动 | SLOW=1
+# 跑于 2026-10-10 00:35:21 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 6be142c+改动
 
 === 库引擎和延迟删除的配置 ===
 name	engine

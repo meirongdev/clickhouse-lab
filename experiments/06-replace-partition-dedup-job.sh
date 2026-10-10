@@ -98,3 +98,5 @@ q1 "SELECT hostName() AS host, count() AS rows FROM clusterAllReplicas('default'
 
 for t in events events_dedup_keys events_dedup_tmp; do q1 "DROP TABLE IF EXISTS $t ON CLUSTER default SYNC" >/dev/null; done
 exit $FAILED
+#   - ClickHouse Official Documentation (2025/2026)
+#     https://clickhouse.com/docs/en/

@@ -187,7 +187,7 @@ mk_load; R1; R2; R3
 extra 2 w- 40 $((DAY + 50000000))
 q1 "SYSTEM SYNC REPLICA $T" >/dev/null
 g4=$(G4)
-note "R4 读到 $g4，快照是 $C0"
+note "R4 读到 ${g4}，快照是 $C0"
 expect "R4 拦下（不是「三个副本都 = 快照且队列空」，不换分区）" "$([ "$g4" != "$C0,$C0,$C0|0" ] && echo 1 || echo 0)" "1"
 note "处理：删掉 _bak/_dedup/_dupkeys 从 R1 重来，或者先停掉那个写入源"
 
@@ -250,3 +250,5 @@ note "R3 的读写量跟着分区行数线性涨，R5 只挂硬链接（实验 2
 
 drop_all
 exit $FAILED
+#   - ClickHouse Official Documentation (2025/2026)
+#     https://clickhouse.com/docs/en/

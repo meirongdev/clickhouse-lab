@@ -111,3 +111,5 @@ expect "三个副本都没有从别处拉数据（DownloadPart 合计）" \
 
 for t in hl_src hl_bak hl_new; do q1 "DROP TABLE IF EXISTS $t ON CLUSTER default SYNC" >/dev/null; done
 exit $FAILED
+#   - ClickHouse Official Documentation (2025/2026)
+#     https://clickhouse.com/docs/en/

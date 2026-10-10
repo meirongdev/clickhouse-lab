@@ -190,3 +190,5 @@ for t in ev17a ev17b ev17c; do
   for s in "" _tmp; do q1 "DROP TABLE IF EXISTS $t$s ON CLUSTER default SYNC" >/dev/null; done
 done
 exit $FAILED
+#   - ClickHouse Official Documentation (2025/2026)
+#     https://clickhouse.com/docs/en/

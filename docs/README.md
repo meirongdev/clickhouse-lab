@@ -11,6 +11,7 @@
 | `review-dedup-replace-plan.md` | 评审一份 REPLACE PARTITION 去重方案：测试方案、实验 16–20 的结论、改过的 runbook、几种清理办法的对比 |
 | `production-shape.md` | 生产形态的脱敏规格：集群、节点规格和数据量的三档、冷热分层、34 列宽表的 DDL、写入速率、重复的三种形状、和大规模有关的默认值、只读补数据的 SQL |
 | `plan-scale-dedup.md` | 待建实验 22 的计划：在更大的机器上按生产量级（每天一千多万到三亿多行）跑改过的 runbook，量内存、磁盘、part 数这些能带到生产的数 |
+| `best-practices-billion-rows.md` | 每天上亿数据规模及 Kafka 报表生成的最佳实践和架构演进 |
 | `dedup-solution.md` | 选定的去重方案（记录）：为什么不靠 sink 的 `exactlyOnce`、主流做法、落到这套生产上的六项措施和上线顺序、每一条的出处，以及对照生产脱敏数据的验证计划（待建实验 24 和规模验证 V5–V9） |
 
 ## 标注约定

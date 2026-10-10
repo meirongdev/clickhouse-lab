@@ -154,8 +154,8 @@ for x in a b c; do
                               FROM system.query_log
                               WHERE type = 'QueryStart' AND query_kind = 'Insert' AND has(tables, 'default.t21_$x')
                                 AND event_time_microseconds >= '$T0' FORMAT TSV" | tr '\t' ' ')"
-  expect "t21_$x：两次 INSERT 用的是同一个 insert_deduplication_token" "$n_tok" "1"
-  expect "t21_$x：重投在第一次之后 30–90 秒开始（实际 ${gap}s，1 = 是）" "$([ "$gap" -gt 30 ] && [ "$gap" -le 95 ] && echo 1 || echo 0)" "1"
+  expect "t21_${x}：两次 INSERT 用的是同一个 insert_deduplication_token" "$n_tok" "1"
+  expect "t21_${x}：重投在第一次之后 30–90 秒开始（实际 ${gap}s，1 = 是）" "$([ "$gap" -gt 30 ] && [ "$gap" -le 95 ] && echo 1 || echo 0)" "1"
 done
 newparts() { q1 "SELECT count() FROM system.part_log WHERE event_type = 'NewPart' AND table = 't21_$1' AND error = $2
                  AND rows = 5 AND event_time_microseconds >= '$T0'" | tr -d '\n'; }
@@ -188,9 +188,9 @@ for x in d e; do wait_rows "SELECT count() FROM t21_$x" 6 60 >/dev/null || FAILE
 docker kill "$CONNECT_CONTAINER" >/dev/null
 note "offset 1–5 写进去之后立刻 kill -9 掉 Connect worker：写进去了，offset 来不及提交"
 C_D=$(committed c21-d t21_d); C_E=$(committed c21-e t21_e)
-note "崩溃时已提交的 offset：d=$C_D，e=$C_E（下次从这里重读）"
+note "崩溃时已提交的 offset：d=${C_D}，e=${C_E}（下次从这里重读）"
 VALID=1
-if [ "$C_D" -ge 6 ] || [ "$C_E" -ge 6 ]; then
+if [ "${C_D}" -ge 6 ] || [ "${C_E}" -ge 6 ]; then
   echo "  [注意] 崩溃之前提交点刚好到了，这一轮测不出「写了没提交」，重跑一次"; VALID=0; FAILED=1
 fi
 for x in d e; do batch "$x" 6 5; done
@@ -221,3 +221,5 @@ note "那一种只能靠块级去重窗口（尽力而为）或者下游幂等�
 
 cleanup
 exit $FAILED
+#   - ClickHouse Official Documentation (2025/2026)
+#     https://clickhouse.com/docs/en/

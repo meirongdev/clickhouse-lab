@@ -3,7 +3,7 @@
 这一份记的是针对生产那条写入链路选定的去重方案：为什么不靠 sink 的 `exactlyOnce`，主流做法是什么，落到这套生产上分哪几步，每一步的依据和出处，以及还要怎么对照生产的脱敏数据去验证。
 
 - **状态：** 方案记录，2026-10-07。还没在生产上执行。
-- **证据分三档：** 有的已经在 lab 上做成了实验；有的只用一次性探针在 lab 上看过一次（第八节附了探针的 SQL，正式断言放进待建实验 24）；有的还只是推断。每一条都按 [docs/README.md](README.md#标注约定) 的约定标了。
+- **证据分三档：** 有的已经在 lab 上做成了实验；有的只用一次性探针在 lab 上看过一次（第八节附了探针的 SQL，正式断言放进实验 24）；有的还只是推断。每一条都按 [docs/README.md](README.md#标注约定) 的约定标了。
 - **还没核的生产信息集中在第六节。** 那一节的只读 SQL 拿到结果之前，第四节里标「待核」的前提都不要当真。
 
 生产的形态（写入入口、表、三种重复、下游聚合）见 [production-shape.md](production-shape.md)；清理历史重复的 runbook 见 [review-dedup-replace-plan.md](review-dedup-replace-plan.md#改过的-runbook)。
@@ -179,7 +179,7 @@ producer 配 `enable.idempotence=true`、`acks=all`、`max.in.flight.requests.pe
 - **三副本挤在一台机器上，耗时不能和生产比。** 三份数据写同一块盘，merge 也是三个副本各做各的。V5、V7 只看相对变化和字节数。
 - **省掉重新造数据：** 实验 22 跑 P2、P3 时带 `KEEP=1` 留下数据，接着按 V7 → V6 → V9 → V8 的顺序跑：先把造好的 `ReplicatedMergeTree` 分区 `ATTACH` 进 `ReplicatedReplacingMergeTree`（顺带量 V7 的耗时），再在新表上量 `FINAL`、等合并、最后重算聚合。两亿、三亿行造一次就要几个小时，这样每档只造一次。
 
-### V-a 小规模（lab，待建实验 24）
+### V-a 小规模（lab，实验 24）
 
 把 2026-10-06 的探针写成断言，再补几条：
 
@@ -295,7 +295,7 @@ WHERE path = (SELECT zookeeper_path FROM system.replicas WHERE database = '{db}'
 
 ## 八、附：2026-10-06 的一次性探针
 
-在 lab 上手工跑的，没有进 `experiments/`；待建实验 24 把它们写成断言。环境：25.3.14.14，`Atomic` 库，三副本，DDL 带 `ON CLUSTER default`（建法同其他实验）。
+在 lab 上手工跑的，没有进 `experiments/`；实验 24 把它们写成断言。环境：25.3.14.14，`Atomic` 库，三副本，DDL 带 `ON CLUSTER default`（建法同其他实验）。
 
 **物化视图和源表去重（M1）。** 源表是 `ReplicatedMergeTree`，物化视图写进 `ReplicatedSummingMergeTree`。同一行用同样的设置插两次：
 

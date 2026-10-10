@@ -1,4 +1,4 @@
-# 跑于 2026-10-05 02:34:32 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab ca4e119+改动 | SLOW=1
+# 跑于 2026-10-10 00:36:03 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 6be142c+改动
 
 === 准备：一张普通的复制表，Keeper 还在的时候写得进去 ===
   · Keeper 的形状（四字命令 mntr）：zk_server_state=standalone zk_followers=0 
@@ -22,10 +22,7 @@ insert_keeper_retry_max_backoff_ms	10000
   INSERT 卡了约 1s 才返回，报错原文：
     Code: 242. DB::Exception: Table is in readonly mode: replica_path=/ch/tables/01/keeper_outage/replicas/ch1. (TABLE_IS_READ_ONLY) (version 25.3.14.14 (
   [符合] 报的是 TABLE_IS_READ_ONLY
-  · （SLOW）按默认的 20 次重试实测一次，看是不是真卡满约 142 秒才报错：
-  INSERT 卡了约 143s 才返回：Code: 242. DB::Exception: Table is in readonly mode: replica_path=/ch/tables/01/keeper_outage/replicas/ch1. (T
-  [符合] 实测卡的秒数和退避公式算出来的差不到 10 秒（1 = 是）：1
-  · Keeper 拉回来之后，副本自己退出 readonly 用了约 6s，没做任何人工干预
+  · Keeper 拉回来之后，副本自己退出 readonly 用了约 4s，没做任何人工干预
   [符合] is_readonly 回到 0：0
   [符合] 写入恢复（空 = 成功）：
   · 三副本行数追平用了约 0s

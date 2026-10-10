@@ -57,7 +57,7 @@ add_dups() {
       SELECT concat('k', toString(number)), $W0 + number * 20, 0,
         toDateTime64('2026-03-24 10:00:05', 3, 'UTC'), 'dup' FROM numbers($D)"
   q1 "SYSTEM SYNC REPLICA $T" >/dev/null
-  expect "第 $DUP_ROUND 轮重复真的写进来了（当天行数 = $WIN + $D）" \
+  expect "第 $DUP_ROUND 轮重复真的写进来了（当天行数 = $WIN + ${D}）" \
     "$(q1 "SELECT count() FROM $T WHERE _partition_id = '$PID'" | tr -d '\n')" "$((WIN + D))"
 }
 # untouched_of <起始时间>  这段时间里 ch1 上的 MutatePart 有几个是「没命中、只做 hardlink 克隆」的，以及它们写了多少字节
@@ -151,7 +151,7 @@ add_dups
 PID_PARTS=$(q1 "SELECT count() FROM system.parts WHERE database = currentDatabase() AND table = '$T' AND partition_id = '$PID' AND active" | tr -d '\n')
 run_delete "DELETE FROM $T IN PARTITION ID '$PID' WHERE (_part, _part_offset) IN ($SUBQ)
             SETTINGS allow_nondeterministic_mutations = 1"
-expect "子查询的遍数不超过当天分区的 part 数 $PID_PARTS（不再跟着全表 part 数走，1 = 是）" "$(python3 -c "print(int($RATIO < $PID_PARTS))")" "1"
+expect "子查询的遍数不超过当天分区的 part 数 ${PID_PARTS}（不再跟着全表 part 数走，1 = 是）" "$(python3 -c "print(int($RATIO < $PID_PARTS))")" "1"
 note "IN PARTITION 把「每个 part 判断一次命没命中、每次都跑一遍子查询」限制在当天分区里。当天 part 多了照样放大，"
 note "所以执行前先看一眼当天的 active part 数，必要时先把当天合并掉"
 expect "别的分区被改的 part 数" "$MUTATED_OTHER" "0"
@@ -163,8 +163,8 @@ q1 "DELETE FROM $T IN PARTITION ID '$PID' WHERE (_part, _part_offset) IN ($SUBQ)
 wait_mutation $T 120 >/dev/null
 c=$(q1 "SELECT count() FROM $T WHERE _partition_id = '$PID'" | tr -d '\n')
 r=$(q1 "SELECT sum(rows) FROM system.parts WHERE database = currentDatabase() AND table = '$T' AND partition_id = '$PID' AND active" | tr -d '\n')
-note "count() = $c，system.parts sum(rows) = $r"
-expect "system.parts 比 count() 多出来的行（至少是这一次的 $D）" "$(python3 -c "print(int($r - $c >= $D))")" "1"
+note "count() = ${c}，system.parts sum(rows) = $r"
+expect "system.parts 比 count() 多出来的行（至少是这一次的 ${D}）" "$(python3 -c "print(int($r - $c >= $D))")" "1"
 expect "带轻量删除标记的 part 数 > 0" "$(q1 "SELECT countIf(has_lightweight_delete) > 0 FROM system.parts
          WHERE database = currentDatabase() AND table = '$T' AND partition_id = '$PID' AND active")" "1"
 note "所以用方法一时不能拿 system.parts 的 sum(rows) 当核对，要用 count()；方法二换进来的 part 没有标记，两者一致"
@@ -184,7 +184,7 @@ m_all=$(q1 "SELECT countIf(event_type = 'MutatePart') FROM system.part_log WHERE
 m_other=$(q1 "SELECT countIf(event_type = 'MutatePart' AND partition_id != '$PID') FROM system.part_log WHERE database = currentDatabase() AND table = '$T' AND event_time_microseconds >= '$t0'" | tr -d '\n')
 untouched_of "$t0"
 note "当时 active part $p_before 个；这条 DELETE 出了 $m_all 个新版本 part，其中别的分区 $m_other 个"
-expect "别的分区的 part 全都出了一个新版本（= 别的分区当时的 part 数 $other_before）" "$m_other" "$other_before"
+expect "别的分区的 part 全都出了一个新版本（= 别的分区当时的 part 数 ${other_before}）" "$m_other" "$other_before"
 expect "别的分区那些都是 hardlink 克隆（克隆数 ≥ 别的分区 part 数，1 = 是）" "$([ "$UNTOUCHED" -ge "$m_other" ] && echo 1 || echo 0)" "1"
 expect "克隆写盘字节数" "$UNTOUCHED_BYTES" "0"
 note "字面量 DELETE 没有子查询，判断命没命中只靠主键和分区裁剪，所以读不放大；代价是每个 part 都要换一个"
@@ -202,3 +202,5 @@ note "同一秒写进来的两份（DateTime 精度到秒时很常见）用 crea
 
 q1 "DROP TABLE IF EXISTS $T ON CLUSTER default SYNC" >/dev/null
 exit $FAILED
+#   - ClickHouse Official Documentation (2025/2026)
+#     https://clickhouse.com/docs/en/

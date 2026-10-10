@@ -63,3 +63,5 @@ q1 "DROP TABLE IF EXISTS lit_clone ON CLUSTER default SYNC" >/dev/null
 q1 "DROP TABLE IF EXISTS uuid_src ON CLUSTER default SYNC"  >/dev/null
 q1 "DROP TABLE IF EXISTS uuid_clone ON CLUSTER default SYNC" >/dev/null
 exit $FAILED
+#   - ClickHouse Official Documentation (2025/2026)
+#     https://clickhouse.com/docs/en/

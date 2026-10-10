@@ -162,9 +162,9 @@ for t in rmt rmt_spread; do
   G_MEM=$(m3 "SELECT count() FROM (SELECT id FROM $t GROUP BY id, settle_time)" memory_usage)
   F_MS=$(m3 "SELECT count() FROM $t FINAL" query_duration_ms)
   G_MS=$(m3 "SELECT count() FROM (SELECT id FROM $t GROUP BY id, settle_time)" query_duration_ms)
-  note "$t：GROUP BY 去重的耗时是 FINAL 的 $(awk -v a="$G_MS" -v b="$F_MS" 'BEGIN { printf "%.0f", a / (b > 0 ? b : 1) }') 倍，内存是 $(awk -v a="$G_MEM" -v b="$F_MEM" 'BEGIN { printf "%.0f", a / (b > 0 ? b : 1) }') 倍"
-  expect "$t：FINAL 比自己 GROUP BY 去重省内存（差一个数量级以上，1 = 是）" "$([ "$F_MEM" -lt "$((G_MEM / 10))" ] && echo 1 || echo 0)" "1"
-  expect "$t：FINAL 比自己 GROUP BY 去重快（1 = 是）" "$([ "$F_MS" -lt "$G_MS" ] && echo 1 || echo 0)" "1"
+  note "${t}：GROUP BY 去重的耗时是 FINAL 的 $(awk -v a="$G_MS" -v b="$F_MS" 'BEGIN { printf "%.0f", a / (b > 0 ? b : 1) }') 倍，内存是 $(awk -v a="$G_MEM" -v b="$F_MEM" 'BEGIN { printf "%.0f", a / (b > 0 ? b : 1) }') 倍"
+  expect "${t}：FINAL 比自己 GROUP BY 去重省内存（差一个数量级以上，1 = 是）" "$([ "$F_MEM" -lt "$((G_MEM / 10))" ] && echo 1 || echo 0)" "1"
+  expect "${t}：FINAL 比自己 GROUP BY 去重快（1 = 是）" "$([ "$F_MS" -lt "$G_MS" ] && echo 1 || echo 0)" "1"
 done
 note "FINAL 能利用「每个 part 本来就按排序键有序」这件事，做的是流式归并；"
 note "自己写 GROUP BY / LIMIT 1 BY 等于把这个前提丢掉，要在内存里重新攒一遍哈希表或者重新排序。"
@@ -192,3 +192,5 @@ note "分区数、并发、冷热层都不一样，倍数关系能带走，绝�
 
 for t in rmt rmt_spread; do q1 "DROP TABLE IF EXISTS $t ON CLUSTER default SYNC" >/dev/null; done
 exit $FAILED
+#   - ClickHouse Official Documentation (2025/2026)
+#     https://clickhouse.com/docs/en/

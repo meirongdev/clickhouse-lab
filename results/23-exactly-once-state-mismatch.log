@@ -1,10 +1,10 @@
-# 跑于 2026-10-05 15:02:45 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab ca4e119+改动
+# 跑于 2026-10-10 00:38:57 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 6be142c+改动
 # Kafka Connect 7.7.0-ccs | clickhouse-kafka-connect v1.3.9
 
 === 一、崩溃之前，提交点之后写过不止一批：重读的第一批整个落在记录区间之前 ===
   · a：errors.tolerance=none（默认）；b：errors.tolerance=all + DLQ。都开着 exactlyOnce，max.poll.records 压到 5
   · 预热那一条（offset 0）写进去之后重启一次 task：正常停下时会先提交 offset，提交点落在 1
-  · 提交点之后分 3 次、每次 5 条发 offset 1–15，每次都等它写进 ClickHouse，一共用了 5s
+  · 提交点之后分 3 次、每次 5 条发 offset 1–15，每次都等它写进 ClickHouse，一共用了 6s
   · a 的状态表：AFTER_PROCESSING [11, 15]
   · b 的状态表：AFTER_PROCESSING [11, 15]
   · kill -9 掉 Connect worker 再拉起来（REST 就绪用了 12s）。提交点还在 1，重启后从 offset 1 重读，第一批是 [1, 5]
@@ -26,36 +26,4 @@
 
 === 二、插入在服务端没提交、状态停在 BEFORE_PROCESSING，之后批次边界变了 ===
   · c：errors.tolerance=none；d：errors.tolerance=all + DLQ；e：errors.tolerance=all，没配 DLQ。都开着 exactlyOnce
-  · 预热（offset 0）写进去之后，给数据 INSERT 加上 insert_keeper_fault_injection_probability=1,insert_keeper_max_retries=10；改配置会重启 task，提交点落在 1
-  · 暂停时攒下 offset 1–5，恢复之后作为一批 [1, 5] 去写：先记 BEFORE_PROCESSING [1, 5]，再发这条带故障注入的 INSERT
-  · c 的状态表（恢复后 50s）：BEFORE_PROCESSING [1, 5]
-  · d 的状态表（恢复后 50s）：BEFORE_PROCESSING [1, 5]
-  · e 的状态表（恢复后 50s）：BEFORE_PROCESSING [1, 5]
-  [符合] 三张表的状态都停在 BEFORE_PROCESSING [1, 5]：BEFORE_PROCESSING [1, 5]|BEFORE_PROCESSING [1, 5]|BEFORE_PROCESSING [1, 5]
-  [符合] 这一批没写进去（三张表各只有预热那 1 行）：1-1-1
-  · 客户端这边（connector 日志，UTC）：c 那条 INSERT 在 2026-10-05 07:05:45 报错，异常链里是 Read timed out（共 6 处），
-  ·   Utils 认出的是「ClickHouseException code: 210」：clickhouse-java V1 把读超时包成 210（NETWORK_ERROR），也在可重试列表里。服务端这条 INSERT 的结局：
-tbl	type	started	ms	written_rows	code
-t23_c	ExceptionWhileProcessing	07:05:15	42733	5	999
-t23_d	ExceptionWhileProcessing	07:05:15	42724	5	999
-t23_e	ExceptionWhileProcessing	07:05:15	42712	5	999
-  · 又来 2 条（offset 6–7）。接着去掉故障注入，把 max.poll.records 改成 2：这一次重启之后，一批只拿 2 条
-  · c：重启后 2s 变成 FAILED
-  · 等服务端那几条带故障注入的 INSERT 都结束（又等了 0s），再看结果
-  [符合] c（tolerance=none）：task FAILED：FAILED
-  [符合] c：报错是 BEFORE_PROCESSING 的 State CONTAINS（1 = 是）：1
-  [符合] c：ClickHouse 里只有预热那一行，offset 1–7 都还在 Kafka（行数，提交点）：1,1
-  [符合] d（tolerance=all + DLQ）：task 仍是 RUNNING：RUNNING
-  [符合] d：ClickHouse 里的 offset：0,6,7
-  [符合] d：DLQ 里的 offset：1,2,3,4,5
-  · d：DLQ 记录的异常：com.clickhouse.kafka.connect.sink.dlq.DuplicateException ×1；java.lang.RuntimeException BEFORE_PROCESSING: State CONTAINS given ×4；
-  [符合] e（tolerance=all，没配 DLQ）：task 仍是 RUNNING：RUNNING
-  [符合] e：ClickHouse 里的 offset：0,6,7
-  [符合] e：提交点越过了 offset 1–5（committed）：8
-  [符合] d、e 上从来没有过 5 行的那个 part（NewPart error = 0 且 rows = 5 的条数）：0
-  · d、e 的 offset 1–5 从头到尾没写进 ClickHouse：d 只剩 DLQ 里那一份，e 什么都没剩，offset 却已经提交过去了
-  [符合] c：状态表里 t23_c-0 那一行删掉了：0
-  · c 的恢复：删掉状态表里 t23_c-0 那一行之后重启 task（tolerateStateMismatch 只管 AFTER_PROCESSING，这里用不上）
-  [符合] c：offset 0–7 都写进来了，没有重复（行数，重复的 offset 数）：8,0
-  · 结论：插入结果不明、批次边界又变了的时候，exactlyOnce 不重插这一段。errors.tolerance=none 时 task 停下等人删状态行，
-  · 数据还在 Kafka；errors.tolerance=all 时 task 不停，这一段只剩 DLQ 里那一份，没配 DLQ 就直接丢了。
+experiments/23-exactly-once-state-mismatch.sh: line 209: FI�: unbound variable

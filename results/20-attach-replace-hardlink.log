@@ -1,4 +1,4 @@
-# 跑于 2026-10-07 01:15:39 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab fe2db37+改动 | SLOW=1
+# 跑于 2026-10-10 00:37:35 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 6be142c+改动
 
 === 一、ATTACH PARTITION … FROM 做快照 ===
   [符合] 快照表和原表的 v.bin 是同一个 inode（ch1 上看，1 = 是）：1

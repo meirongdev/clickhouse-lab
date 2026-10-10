@@ -123,7 +123,7 @@ wait_committed() {
     v=$(committed "$1" "$2"); [ "$v" = "$3" ] && { echo "$t"; return 0; }
     sleep 3; t=$((t + 3))
   done
-  echo "超时（最后读到 $v）"; return 1
+  echo "超时（最后读到 ${v}）"; return 1
 }
 # kill -9 掉 Connect worker 再拉起来，回显等 REST 就绪用了几秒
 connect_kill_restart() {
@@ -158,7 +158,7 @@ for x in a b; do note "$x 的状态表：$(state "$x")"; done
 C_A=$(committed c23-a t23_a); C_B=$(committed c23-b t23_b)
 VALID=1
 if [ "$C_A" != 1 ] || [ "$C_B" != 1 ]; then
-  echo "  [注意] 崩溃之前又提交过一次（a=$C_A，b=$C_B），这一轮造不出「提交点之后写过不止一批」，重跑一次"; VALID=0; FAILED=1
+  echo "  [注意] 崩溃之前又提交过一次（a=${C_A}，b=${C_B}），这一轮造不出「提交点之后写过不止一批」，重跑一次"; VALID=0; FAILED=1
 fi
 T=$(connect_kill_restart)
 note "kill -9 掉 Connect worker 再拉起来（REST 就绪用了 ${T}s）。提交点还在 1，重启后从 offset 1 重读，第一批是 [1, 5]"
@@ -206,7 +206,7 @@ connector_put c23-d "$(sink_config d all yes "$FIS")"
 connector_put c23-e "$(sink_config e all no "$FIS")"
 for x in c d e; do wait_task "c23-$x" RUNNING 90 >/dev/null || FAILED=1; done
 for x in c d e; do wait_committed "c23-$x" "t23_$x" 1 75 >/dev/null || FAILED=1; done
-note "预热（offset 0）写进去之后，给数据 INSERT 加上 $FI；改配置会重启 task，提交点落在 1"
+note "预热（offset 0）写进去之后，给数据 INSERT 加上 ${FI}；改配置会重启 task，提交点落在 1"
 for x in c d e; do pause_c "c23-$x"; done
 for x in c d e; do wait_task "c23-$x" PAUSED 30 >/dev/null || FAILED=1; done
 for x in c d e; do batch "$x" 1 5; done
@@ -281,3 +281,5 @@ note "数据还在 Kafka；errors.tolerance=all 时 task 不停，这一段只�
 
 cleanup
 exit $FAILED
+#   - ClickHouse Official Documentation (2025/2026)
+#     https://clickhouse.com/docs/en/

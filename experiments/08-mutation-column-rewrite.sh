@@ -87,7 +87,7 @@ expect "p=1 里 placed_at 仍是 0 的行数" "$(q1 "SELECT countIf(placed_at = 
 
 section "Compact part 上跑同一种列级 mutation：所有列在一个 data.bin 里，只能整个重写"
 OLD2=$(part_path mut 2)
-note "改之前 p=2 的 part：$OLD2，里面的文件：$(docker exec "$CH1_CONTAINER" ls "$OLD2" | tr '\n' ' ')"
+note "改之前 p=2 的 part：${OLD2}，里面的文件：$(docker exec "$CH1_CONTAINER" ls "$OLD2" | tr '\n' ' ')"
 q1 "ALTER TABLE mut UPDATE placed_at = settled_at IN PARTITION 2 WHERE placed_at = 0" >/dev/null
 wait_mutation mut 60 || FAILED=1
 NEW2=$(part_path mut 2)
@@ -111,3 +111,5 @@ q1 "SELECT hostName() AS replica, mutation_id, is_done, parts_to_do
 
 q1 "DROP TABLE IF EXISTS mut ON CLUSTER default SYNC" >/dev/null
 exit $FAILED
+#   - ClickHouse Official Documentation (2025/2026)
+#     https://clickhouse.com/docs/en/

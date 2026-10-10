@@ -1,4 +1,4 @@
-# 跑于 2026-10-05 02:25:48 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab ca4e119+改动 | SLOW=1
+# 跑于 2026-10-10 00:33:33 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 6be142c+改动
 
 === 建表：三个副本各建一次，窗口压到 2 个块 ===
   [符合] 活跃副本数：3
@@ -25,17 +25,19 @@
   t=15s  znode=4
   t=20s  znode=4
   t=25s  znode=4
-  t=30s  znode=2
-  · 第一次裁剪在建表后约 31 秒被看到（轮询 5 秒一次，真实时刻在这之前 5 秒以内）
+  t=30s  znode=4
+  t=35s  znode=4
+  t=40s  znode=2
+  · 第一次裁剪在建表后约 41 秒被看到（轮询 5 秒一次，真实时刻在这之前 5 秒以内）
   [符合] 第一次裁剪落在建表后 30–50 秒（1 = 是）：1
 
 === 裁剪线程给自己排的下一轮（每个副本的 system.text_log） ===
   副本 第二轮在建表后 排的下一轮 points
-  ch1  33.7s          300000ms     0
+  ch1  37.8s          300000ms     0.33333334
   [符合] ch1 把下一轮排到 300 秒（max_cleanup_delay_period）：300000
-  ch2  30.1s          300000ms     0.33333334
+  ch2  39s            300000ms     0
   [符合] ch2 把下一轮排到 300 秒（max_cleanup_delay_period）：300000
-  ch3  31.5s          300000ms     0
+  ch3  39s            300000ms     0
   [符合] ch3 把下一轮排到 300 秒（max_cleanup_delay_period）：300000
   · points 是这一轮清掉的东西折算出来的分数，期望值 cleanup_thread_preferred_points_per_iteration=150。
   · 清掉两个块只折合零点几分，比期望小两个数量级，所以三个副本都退到了上限 300 秒（只有第一轮不调整）。
@@ -46,68 +48,13 @@
 
 === ⑦ 再插 3 个别的块，blocks/ 远超窗口；等到上一轮裁剪之后 60 秒，重投最老的那个块 ===
   [符合] 行数：10
-  · 现在是建表后 96 秒，离最后一个副本的第二轮已经过了 60 秒以上
+  · 现在是建表后 101 秒，离最后一个副本的第二轮已经过了 60 秒以上
   [符合] blocks/ 仍是 6 个 znode（这 60 秒里没有任何副本裁过）：6
   [符合] 重投 other-2（blocks/ 里最老、早就在窗口外的块）仍被拦住，行数不变：10
   · 按「30–40 秒一轮」的说法它早该被裁掉了。低写入的表上，超出窗口的块可以在 blocks/ 里多留约 5 分钟。
-
-=== ⑧（SLOW）等第三轮裁剪：应该落在最早那个副本的第二轮之后约 300 秒 ===
-  t=0s   znode=6
-  t=5s   znode=6
-  t=10s  znode=6
-  t=15s  znode=6
-  t=20s  znode=6
-  t=25s  znode=6
-  t=30s  znode=6
-  t=35s  znode=6
-  t=40s  znode=6
-  t=45s  znode=6
-  t=50s  znode=6
-  t=55s  znode=6
-  t=60s  znode=6
-  t=65s  znode=6
-  t=70s  znode=6
-  t=75s  znode=6
-  t=80s  znode=6
-  t=85s  znode=6
-  t=90s  znode=6
-  t=95s  znode=6
-  t=100s znode=6
-  t=105s znode=6
-  t=110s znode=6
-  t=115s znode=6
-  t=120s znode=6
-  t=125s znode=6
-  t=130s znode=6
-  t=135s znode=6
-  t=140s znode=6
-  t=145s znode=6
-  t=150s znode=6
-  t=155s znode=6
-  t=160s znode=6
-  t=165s znode=6
-  t=170s znode=6
-  t=175s znode=6
-  t=180s znode=6
-  t=185s znode=6
-  t=190s znode=6
-  t=195s znode=6
-  t=200s znode=6
-  t=205s znode=6
-  t=210s znode=6
-  t=215s znode=6
-  t=220s znode=6
-  t=225s znode=6
-  t=230s znode=6
-  t=235s znode=6
-  t=240s znode=2
-  · 第二次裁剪在建表后约 338 秒被看到，距离最早那个副本的第二轮约 308 秒（轮询 5 秒一次）
-  [符合] 间隔落在 300–320 秒之间（300 秒 + 0–10 秒随机量 + 轮询粒度，1 = 是）：1
-  [符合] 裁掉之后再重投 other-2，第二份落地：11
 
 === 重复出来的行 ===
 id	n
 1	2
 2	2
-12	2
-  [符合] 重复的键组数（batch-A 两个键；SLOW 时再加 other-2）：3
+  [符合] 重复的键组数（batch-A 两个键；SLOW 时再加 other-2）：2

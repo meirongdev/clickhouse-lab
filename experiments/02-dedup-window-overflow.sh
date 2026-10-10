@@ -147,3 +147,5 @@ expect "重复的键组数（batch-A 两个键；SLOW 时再加 other-2）" \
 
 on_all "DROP TABLE IF EXISTS events_dedup SYNC" >/dev/null
 exit $FAILED
+#   - ClickHouse Official Documentation (2025/2026)
+#     https://clickhouse.com/docs/en/

@@ -119,6 +119,7 @@ docs/                      日常排查用的知识，索引在 docs/README.md
 | 14 | `ReplacingMergeTree` + `FINAL` 到底贵在哪 | `deployment-architecture.md` 第 1 条 | 重投能被折叠；代价跟着「落在重叠区间里的行」走，重叠集中时 part 从 14 堆到 29 耗时不变，同样 14 个 part 重叠铺满时贵两三倍；多 part 状态下手写 `GROUP BY` 去重的内存是 `FINAL` 的十几到几十倍，耗时是几倍到几十倍（这一项每轮波动大） |
 | 21 | 真的 Kafka Connect 超时重投，以及 `exactlyOnce` 管不管用 | `deployment-architecture.md` 第 1 条 | 服务端提交了、客户端超时，框架等到下一个 offset 提交点（这次约 55 秒后）原样重投，token 不变：窗口在就拦下，窗口认不出就第二份落地，**开了 `exactlyOnce` 也一样**；worker 崩溃后重投、批次边界变了，窗口在也拦不住，只有 `exactlyOnce` 拦得住 |
 | 23 | `exactlyOnce` 的状态和新来的一批对不上时，task 会不会停、数据会不会丢 | 实验 21 只造过「重读的一批越过记录区间」那一支 | 崩溃前提交点之后写过不止一批（生产上几乎每次崩溃都是）：默认 `errors.tolerance=none` 下重启后 task `FAILED`（`State MISMATCH`），没多写、数据还在 Kafka，打开 `tolerateStateMismatch` 才自己恢复；`errors.tolerance=all` 下 task 不停，已经写过的那几批整批进 DLQ。插入在服务端没提交、客户端只看到超时，之后批次边界又变了：`none` 下 task `FAILED`（`State CONTAINS`），`tolerateStateMismatch` 管不到，要删状态行；**`all` 加 DLQ，这一段只剩 DLQ 里那一份；`all` 不配 DLQ，这一段丢了、offset 照常提交** |
+| 24 | Kafka 数据去重与生成报表的物化视图全流程 | `dedup-solution.md` 验证计划 | `deduplicate_blocks_in_dependent_materialized_views` 的取值影响；迁移 `ReplicatedReplacingMergeTree`；`FINAL` 保留最后写入行 |
 
 还没做的实验也记在 `docs/` 里，按编号找：
 

@@ -196,3 +196,5 @@ note "生产上要 3 节点 Keeper 的理由就在这里：少一台还能写，
 
 q1 "DROP TABLE IF EXISTS keeper_outage ON CLUSTER default SYNC" >/dev/null
 exit $FAILED
+#   - ClickHouse Official Documentation (2025/2026)
+#     https://clickhouse.com/docs/en/

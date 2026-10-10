@@ -115,3 +115,5 @@ note "所以别在文档里写死「ANY JOIN 取第一行」——它连默认�
 q1 "DROP TABLE IF EXISTS tz_utc ON CLUSTER default SYNC" >/dev/null
 q1 "DROP TABLE IF EXISTS tz_sh ON CLUSTER default SYNC" >/dev/null
 exit $FAILED
+#   - ClickHouse Official Documentation (2025/2026)
+#     https://clickhouse.com/docs/en/

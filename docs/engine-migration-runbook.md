@@ -84,7 +84,7 @@ SYSTEM START MERGES ON CLUSTER {cluster} {db}.ev;
 
 - **为什么用 `EXCHANGE`：** 它原子地交换两张表的名字。多表 `RENAME` 官方明说不是原子的（[RENAME](https://clickhouse.com/docs/reference/statements/rename)，已核），中间可能有一刻 `ev` 不存在，sink 就会写失败。
 - **物化视图跟着名字走：** 切换之后，写进新 `ev` 的数据照常触发挂在 `ev` 上的物化视图（lab 实测，实验 27 六）。
-- **停写多久：** 实验 27 里从停 sink 到恢复零点几秒（4 次 0.34–0.50 秒），补了 2 个分区（lab 实测）。生产上主要看第 3 步要补几个分区，每个是一条硬链接的 `REPLACE`。
+- **停写多久：** 实验 27 里从停 sink 到恢复零点几秒（5 次 0.34–0.50 秒），补了 2 个分区（lab 实测）。生产上主要看第 3 步要补几个分区，每个是一条硬链接的 `REPLACE`。
 - **新表的去重窗口是空的（推断，没测）：** `ATTACH`、`REPLACE` 搬的是 part，旧表记在 Keeper 里的插入去重标记不跟过来。切换前写进旧表的批次，切换后如果被重投（比如 connector 的 task 重启，从上次提交的 offset 重读），新表拦不下，会多一份物理行，`FINAL` 折得掉，报表可能多算。切换那天按 [report-pipeline.md](report-pipeline.md) 第三节对一次账。
 
 **6. 核对。** 实验 27 七验过的（lab 实测）：

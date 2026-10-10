@@ -1,4 +1,4 @@
-# 跑于 2026-10-10 23:20:33 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 94c06b8+改动 | 机器 Apple M2 Pro（12 核 / 32 GiB），Docker 12 CPU / 15.7 GiB | SLOW=1
+# 跑于 2026-10-11 00:52:22 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab d5a651e | 机器 Apple M2 Pro（12 核 / 32 GiB），Docker 12 CPU / 15.7 GiB | SLOW=1
 
 === 一、同一批原样重投，带同一个 token（sink 超时重投的形状） ===
   [符合] 设置 0：源表拦下了重投（物理行数）：1
@@ -22,14 +22,7 @@
 
 === 五、设成 1 之后，物化视图目标表自己的窗口也要盖住重投 ===
   · 源表窗口用默认的 1000，目标表窗口压到 2；写 4 个不同的批次，等目标表的裁剪线程把 blocks/ 裁到 2
-  t=0s   znode=4
-  t=5s   znode=4
-  t=10s  znode=4
-  t=15s  znode=4
-  t=20s  znode=4
-  t=25s  znode=4
-  t=30s  znode=4
-  t=35s  znode=2
+  znode 从 4 个降到 2 个，等了约 35s（5 秒轮询一次）
   [符合] 源表窗口还记得，重投被拦下：1
   [符合] 目标表窗口已经裁掉了那一批，物化视图又累加了一次：200
   · M2 调大去重窗口时，物化视图的目标表要一起调，而且不能比源表小。

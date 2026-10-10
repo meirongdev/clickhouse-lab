@@ -1,4 +1,4 @@
-# 跑于 2026-10-10 19:36:56 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 94c06b8+改动 | SLOW=1
+# 跑于 2026-10-11 00:53:01 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab d5a651e | 机器 Apple M2 Pro（12 核 / 32 GiB），Docker 12 CPU / 15.7 GiB | SLOW=1
 
 === 一、没有重复：报表和明细 FINAL 逐桶一致 ===
   · 写了 900000 行、90 批（三天，每批一个 token，轮流打到三个节点）
@@ -51,8 +51,8 @@
 
 === 七、代价：同一张日报，查报表 vs 查明细 FINAL ===
    ┌─log_comment─────┬─read_rows─┬─ms─┬─mem───────┐
-1. │ exp25/raw_final │   1175832 │ 17 │ 28.72 MiB │
-2. │ exp25/report    │      3275 │  2 │ 5.02 MiB  │
+1. │ exp25/raw_final │   1175832 │ 18 │ 24.62 MiB │
+2. │ exp25/report    │      3275 │  2 │ 4.04 MiB  │
    └─────────────────┴───────────┴────┴───────────┘
   [符合] 查报表读的行数不到查明细 FINAL 的 1%（1 = 是）：1
   · 报表每天 48 个桶 × 租户数行，和明细的行数无关；明细一天 300000 行。耗时是这台机器上的数，别外推。

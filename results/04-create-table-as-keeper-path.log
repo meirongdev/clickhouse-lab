@@ -1,4 +1,4 @@
-# 跑于 2026-10-10 19:13:14 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 94c06b8+改动 | SLOW=1
+# 跑于 2026-10-11 00:29:21 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab d5a651e | 机器 Apple M2 Pro（12 核 / 32 GiB），Docker 12 CPU / 15.7 GiB | SLOW=1
 
 === 分支一：原表路径是字面量 ===
   · 原表路径：/ch/tables/01/lit_src
@@ -10,13 +10,13 @@
 === 分支二：原表路径里带 {uuid} ===
   · {uuid} 展开成表自己的 UUID。不加 ON CLUSTER 时每个副本各生成一个 UUID、路径各不相同，就复制不到一起了，所以这一段走 ON CLUSTER
 table	zookeeper_path
-uuid_clone	/ch/tables/2ed5f7ec-e3d4-4d15-8c71-e86290528ba7/uuid_src
-uuid_src	/ch/tables/0f70d9a7-ae27-4565-9964-57d2daf3c1e4/uuid_src
+uuid_clone	/ch/tables/e4b2b66d-b8ad-4134-910d-8ce82fb1917e/uuid_src
+uuid_src	/ch/tables/13bd01b3-593b-4ca8-944a-2ba642380802/uuid_src
   [符合] 两张表的 zookeeper_path 各不相同：2
 
 === runbook 跑之前该做的那条检查 ===
 table	zookeeper_path
 lit_src	/ch/tables/01/lit_src
-uuid_clone	/ch/tables/2ed5f7ec-e3d4-4d15-8c71-e86290528ba7/uuid_src
-uuid_src	/ch/tables/0f70d9a7-ae27-4565-9964-57d2daf3c1e4/uuid_src
+uuid_clone	/ch/tables/e4b2b66d-b8ad-4134-910d-8ce82fb1917e/uuid_src
+uuid_src	/ch/tables/13bd01b3-593b-4ca8-944a-2ba642380802/uuid_src
 # 退出码 0

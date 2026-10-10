@@ -1,7 +1,7 @@
-# 跑于 2026-10-10 21:33:48 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 94c06b8+改动 | SLOW=1
+# 跑于 2026-10-11 00:56:51 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab d5a651e | 机器 Apple M2 Pro（12 核 / 32 GiB），Docker 12 CPU / 15.7 GiB | SLOW=1
 
 === 准备：历史 5 天、每天 200000 行，外加 300 行重放形状的重复 ===
-  · sink 开始写 2026-03-10，已写到 offset 2200
+  · sink 开始写 2026-03-10，已写到 offset 2100
 
 === 一、准备：新表结构和旧表逐项一致 ===
   [符合] 列、类型、默认值、分区键、排序键、主键、存储策略、跳数索引都一致（1 = 是）：1
@@ -23,7 +23,7 @@
   [符合] 搬迁前那 300 行重复也原样搬过来了（新表 2026-03-07 的物理行数）：200300
 
 === 六、切换：EXCHANGE TABLES，恢复 sink ===
-  · sink 从暂停到恢复：342 ms（lab 上 6 个分区；生产上补齐那一步的分区数决定这段时间）
+  · sink 从暂停到恢复：443 ms（lab 上 6 个分区；生产上补齐那一步的分区数决定这段时间）
   [符合] 三个副本上 ev 都是 ReplicatedReplacingMergeTree：['ReplicatedReplacingMergeTree']
   [符合] 物化视图挂在新的 ev 上：['daily_mv']
 
@@ -54,6 +54,6 @@
   [符合] 回滚的闸：三个副本上的旧表，都和 ch1 上的新表逐分区行数一致（一致的副本数）：3
   [符合] 回滚开始之后，新表没有新写进来的 part：0
   [符合] 回滚之后 ev 是 ReplicatedMergeTree：['ReplicatedMergeTree']
-  [符合] sink 写过的每个 offset 都在，而且只有一份（不同 offset 数/物理行数）：8300/8300
+  [符合] sink 写过的每个 offset 都在，而且只有一份（不同 offset 数/物理行数）：8200/8200
   [符合] 人工补发的 50 行也在：50
 # 退出码 0

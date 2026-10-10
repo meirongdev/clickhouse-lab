@@ -1,4 +1,4 @@
-# 跑于 2026-10-10 23:20:12 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 94c06b8+改动 | 机器 Apple M2 Pro（12 核 / 32 GiB），Docker 12 CPU / 15.7 GiB | SLOW=1
+# 跑于 2026-10-11 00:29:24 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab d5a651e | 机器 Apple M2 Pro（12 核 / 32 GiB），Docker 12 CPU / 15.7 GiB | SLOW=1
 
 === 造数据：10000 行正常数据 + 5 组逐字节相同的重复 ===
   · 多余行占比 5/10005，零星写重的形状（生产那次是两亿行里多 234 行，占比还要低得多）

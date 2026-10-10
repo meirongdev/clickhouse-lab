@@ -1,4 +1,4 @@
-# 跑于 2026-10-10 19:13:25 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 94c06b8+改动 | SLOW=1
+# 跑于 2026-10-11 00:29:33 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab d5a651e | 机器 Apple M2 Pro（12 核 / 32 GiB），Docker 12 CPU / 15.7 GiB | SLOW=1
 # Kafka Connect 7.7.0-ccs | clickhouse-kafka-connect v1.3.9
 
 === A、errors.tolerance=none（生产默认）：一条坏记录让 task 停下，之后的数据全卡在 Kafka 里 ===

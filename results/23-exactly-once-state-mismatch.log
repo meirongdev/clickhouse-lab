@@ -1,4 +1,4 @@
-# 跑于 2026-10-10 19:31:20 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 94c06b8+改动 | SLOW=1
+# 跑于 2026-10-11 00:47:25 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab d5a651e | 机器 Apple M2 Pro（12 核 / 32 GiB），Docker 12 CPU / 15.7 GiB | SLOW=1
 # Kafka Connect 7.7.0-ccs | clickhouse-kafka-connect v1.3.9
 
 === 一、崩溃之前，提交点之后写过不止一批：重读的第一批整个落在记录区间之前 ===
@@ -8,7 +8,7 @@
   · a 的状态表：AFTER_PROCESSING [11, 15]
   · b 的状态表：AFTER_PROCESSING [11, 15]
   · kill -9 掉 Connect worker 再拉起来（REST 就绪用了 12s）。提交点还在 1，重启后从 offset 1 重读，第一批是 [1, 5]
-  · a：重启后 32s 变成 FAILED
+  · a：重启后 30s 变成 FAILED
   [符合] a（tolerance=none）：task FAILED：FAILED
   [符合] a：报错是 AFTER_PROCESSING 的 State MISMATCH（1 = 是）：1
   [符合] a：ClickHouse 里没有多写（行数，重复的 offset 数）：16,0
@@ -33,12 +33,12 @@
   · e 的状态表（恢复后 50s）：BEFORE_PROCESSING [1, 5]
   [符合] 三张表的状态都停在 BEFORE_PROCESSING [1, 5]：BEFORE_PROCESSING [1, 5]|BEFORE_PROCESSING [1, 5]|BEFORE_PROCESSING [1, 5]
   [符合] 这一批没写进去（三张表各只有预热那 1 行）：1-1-1
-  · 客户端这边（connector 日志，UTC）：c 那条 INSERT 在 2026-10-10 11:34:19 报错，异常链里是 Read timed out（共 6 处），
+  · 客户端这边（connector 日志，UTC）：c 那条 INSERT 在 2026-10-10 16:50:23 报错，异常链里是 Read timed out（共 6 处），
   ·   Utils 认出的是「ClickHouseException code: 210」：clickhouse-java V1 把读超时包成 210（NETWORK_ERROR），也在可重试列表里。服务端这条 INSERT 的结局：
 tbl	type	started	ms	written_rows	code
-t23_c	ExceptionWhileProcessing	11:33:49	42727	5	999
-t23_d	ExceptionWhileProcessing	11:33:49	42723	5	999
-t23_e	ExceptionWhileProcessing	11:33:49	42720	5	999
+t23_c	ExceptionWhileProcessing	16:49:53	42748	5	999
+t23_d	ExceptionWhileProcessing	16:49:53	42741	5	999
+t23_e	ExceptionWhileProcessing	16:49:53	42729	5	999
   · 又来 2 条（offset 6–7）。接着去掉故障注入，把 max.poll.records 改成 2：这一次重启之后，一批只拿 2 条
   · c：重启后 2s 变成 FAILED
   · 等服务端那几条带故障注入的 INSERT 都结束（又等了 0s），再看结果

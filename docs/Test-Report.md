@@ -18,7 +18,7 @@
 | 物化视图喂的报表会不会多算 | 默认设置下窗口内的重投也会多算；开 `deduplicate_blocks_in_dependent_materialized_views` 只管窗口内的，目标表窗口也要够大，不能和 `async_insert` 一起开；窗口外的重复和改数据一定多算 | 24、25 | [report-pipeline.md](report-pipeline.md) 第二节 |
 | 报表对账和重算 | 按天对账能准确找出偏了的天；从明细 `FINAL` 重算一天、过闸、`REPLACE PARTITION`，三个副本逐桶一致；不过闸会抹掉重算期间的迟到写入 | 25 | [report-pipeline.md](report-pipeline.md) 第三节 |
 | 多时区日报 | UTC 30 分钟桶对整点、半点时区（含夏令时那天）上卷全对；:45 偏移的时区要 15 分钟桶 | 25 | [report-pipeline.md](report-pipeline.md) 第四节 |
-| 重算和大查询不拖慢写入 | `max_threads = N` 就不超过 N 个核；报表重算本来只用 2 个核左右，限到 2 代价小；不限线程的重算会推高同节点小批写入的 p95（只记录、不断言，4 次运行方向一致） | 26 | [report-pipeline.md](report-pipeline.md) 第五节 |
+| 重算和大查询不拖慢写入 | `max_threads = N` 就不超过 N 个核；报表重算本来只用 2 个核左右，限到 2 代价小；不限线程的重算会推高同节点小批写入的 p95（只记录、不断言，5 次运行方向一致） | 26 | [report-pipeline.md](report-pipeline.md) 第五节 |
 | 明细表在线换引擎 | `ATTACH` 搬历史、停写补齐、行数闸、`EXCHANGE` 切换：sink 的数据不丢不重，物化视图跟着名字走，可以回滚，回滚的闸要拿执行 `REPLACE` 的副本当基准。停了 merge 的表复制队列可能不归零，排空要用 `SYNC REPLICA … LIGHTWEIGHT` | 27 | [engine-migration-runbook.md](engine-migration-runbook.md) |
 | 误删、Keeper 故障、part 太多 | 误删各场景能救回什么；Keeper 停掉和冻住的区别；part 数先拖慢后拒绝 | 07、11、12、13 | [daily-checklist.md](daily-checklist.md) |
 | 25.3 的默认值 | 去重窗口和 15 项 MergeTree 默认值逐项和源码一致 | 01 | [mechanism-map.md](mechanism-map.md) |
@@ -38,7 +38,7 @@
 
 <!-- results:begin（这一段由 ./report.sh 从 results/ 生成，别手改） -->
 
-出处：2026-10-10 19:07:29 到 2026-10-10 23:20:33 跑的；lab `94c06b8+改动`；SLOW=1；机器 没记（实验 01、02、03、04、05、07、08、09、10、11、12、13、16、17、18、19、20、21、23、25、26、27）；Apple M2 Pro（12 核 / 32 GiB），Docker 12 CPU / 15.7 GiB（实验 06、14、24）。
+出处：2026-10-11 00:23:41 到 2026-10-11 00:56:51 跑的；lab `d5a651e`；SLOW=1；机器 Apple M2 Pro（12 核 / 32 GiB），Docker 12 CPU / 15.7 GiB。
 
 | # | 验的是什么 | 符合 | 不符 | 退出码 |
 |---|---|---|---|---|

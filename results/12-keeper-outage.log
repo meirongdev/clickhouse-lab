@@ -1,4 +1,4 @@
-# 跑于 2026-10-10 19:16:22 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 94c06b8+改动 | SLOW=1
+# 跑于 2026-10-11 00:32:31 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab d5a651e | 机器 Apple M2 Pro（12 核 / 32 GiB），Docker 12 CPU / 15.7 GiB | SLOW=1
 
 === 准备：一张普通的复制表，Keeper 还在的时候写得进去 ===
   · Keeper 的形状（四字命令 mntr）：zk_server_state=standalone zk_followers=0 
@@ -23,9 +23,9 @@ insert_keeper_retry_max_backoff_ms	10000
     Code: 242. DB::Exception: Table is in readonly mode: replica_path=/ch/tables/01/keeper_outage/replicas/ch1. (TABLE_IS_READ_ONLY) (version 25.3.14.14 (
   [符合] 报的是 TABLE_IS_READ_ONLY
   · （SLOW）按默认的 20 次重试实测一次，看是不是真卡满约 142 秒才报错：
-  INSERT 卡了约 142s 才返回：Code: 242. DB::Exception: Table is in readonly mode: replica_path=/ch/tables/01/keeper_outage/replicas/ch1. (T
+  INSERT 卡了约 143s 才返回：Code: 242. DB::Exception: Table is in readonly mode: replica_path=/ch/tables/01/keeper_outage/replicas/ch1. (T
   [符合] 实测卡的秒数和退避公式算出来的差不到 10 秒（1 = 是）：1
-  · Keeper 拉回来之后，副本自己退出 readonly 用了约 12s，没做任何人工干预
+  · Keeper 拉回来之后，副本自己退出 readonly 用了约 6s，没做任何人工干预
   [符合] is_readonly 回到 0：0
   [符合] 写入恢复（空 = 成功）：
   · 三副本行数追平用了约 0s
@@ -44,7 +44,7 @@ insert_keeper_retry_max_backoff_ms	10000
   [符合] 解冻后那条 INSERT 自己落地了（客户端早就放弃了）：1
 type	query_duration_ms	written_rows	exception_code
 QueryStart	0	0	0
-QueryFinish	42757	1	0
+QueryFinish	42726	1	0
   [符合] 服务端那边这条 INSERT 是正常结束的：QueryFinish、写入 1 行、没有报错、耗时超过 30 秒（1 = 是）：1
   · HTTP 客户端断开不会取消一条正在执行的 INSERT（只有只读查询才可能因为客户端断开被取消），
   · 所以对客户端是「超时失败」，对服务端是「成功提交」。框架这时候原样重投，就是第二次提交

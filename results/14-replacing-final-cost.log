@@ -1,11 +1,11 @@
-# 跑于 2026-10-10 23:20:14 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 94c06b8+改动 | 机器 Apple M2 Pro（12 核 / 32 GiB），Docker 12 CPU / 15.7 GiB | SLOW=1
+# 跑于 2026-10-11 00:44:02 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab d5a651e | 机器 Apple M2 Pro（12 核 / 32 GiB），Docker 12 CPU / 15.7 GiB | SLOW=1
 name	value
 do_not_merge_across_partitions_select_final	0
 split_intersecting_parts_ranges_into_layers_final	1
 split_parts_ranges_into_intersecting_and_non_intersecting_final	1
 
 === 造数据：两张表各 10000000 行 + 5 次重投（每次 100000 行，逐字节相同） ===
-  · 单位成本（只算这 10000000 行，ch1 一个副本）：INSERT … SELECT 用了 1039 ms；落盘 160.19 MiB，每行 16.8 字节，未压缩每行 37.9 字节
+  · 单位成本（只算这 10000000 行，ch1 一个副本）：INSERT … SELECT 用了 1122 ms；落盘 160.19 MiB，每行 16.8 字节，未压缩每行 37.9 字节
   · rmt：重投的都是前 100000 个键，和生产上「重投的是刚写的那一批」同形，重叠集中在一小段排序键上
   · rmt_spread：每次重投的 100000 行均匀撒在全部 10000000 个键上，每个 part 都和别的 part 处处重叠
   · active part 数：rmt 14，rmt_spread 14
@@ -21,38 +21,38 @@ split_parts_ranges_into_intersecting_and_non_intersecting_final	1
   · 掉到哪一步、什么时候掉完，都不由你定——所以对账口径要么带 FINAL，要么认这个不确定性。
 
 === 二、代价随查询形状变，不是一个固定倍数（rmt） ===
-  count()                      1 ms  1.00 行  4.01 MiB
+  count()                      1 ms  1.00 行  4.02 MiB
   count() FINAL                12 ms  10.80 million 行  12.29 MiB
-  范围查询（走排序键） 4 ms  344.06 thousand 行  4.10 MiB
-  范围查询 FINAL           10 ms  491.52 thousand 行  11.06 MiB
+  范围查询（走排序键） 4 ms  344.06 thousand 行  4.11 MiB
+  范围查询 FINAL           9 ms  491.52 thousand 行  11.06 MiB
   [符合] 不带 FINAL 的 count() 只读元数据（read_rows = 1）：1
   [符合] 带 FINAL 的 count() 得真扫一遍（1 = read_rows 不小于表行数）：1
-  · 范围查询带 FINAL 是不带的 2.5 倍
+  · 范围查询带 FINAL 是不带的 2.2 倍
   · 最贵的是 count()：不带 FINAL 走元数据快捷路径，带上就得把每个 part 读一遍。走排序键的范围查询
   · 只碰被扫到的那几个 granule，额外开销是同一个量级——「FINAL 贵不贵」要看查询形状，拿 count() 的倍数吓人是不对的。
 
 === 三、代价跟着「落在重叠区间里的行」走，而不只是 part 数 ===
   · 再往 rmt 里堆 15 个集中在前 20000 个键上的小 part（同样每个给不同的 token）
-  rmt（重叠集中在前 10 万个键）  14 个 part → count() FINAL 中位 13 ms
-  rmt 再堆 15 个集中的小 part  29 个 part → count() FINAL 中位 27 ms
-  rmt_spread（重叠铺满全部键）  14 个 part → count() FINAL 中位 45 ms
+  rmt（重叠集中在前 10 万个键）  14 个 part → count() FINAL 中位 16 ms
+  rmt 再堆 15 个集中的小 part  29 个 part → count() FINAL 中位 24 ms
+  rmt_spread（重叠铺满全部键）  14 个 part → count() FINAL 中位 50 ms
   [符合] 同样的 part 数，重叠铺满的比重叠集中的贵（1 = 是）：1
   [符合] part 多一倍、但重叠集中的，仍比 part 少、重叠铺满的便宜（1 = 是）：1
-  · 重叠集中时 part 从 14 个堆到 29 个，耗时 13 → 27 ms；同样 14 个 part、重叠铺满时 45 ms。
+  · 重叠集中时 part 从 14 个堆到 29 个，耗时 16 → 24 ms；同样 14 个 part、重叠铺满时 50 ms。
   · FINAL 只归并互相重叠的区间，不重叠的直接读：part 多了、重叠的行多了，它会变贵，但贵多少看重叠覆盖多少行，
   · 光数 part 不够。按时间排序、只重投最近一批的表，重叠天然是集中的。
 
 === 四、和「不用 FINAL、自己在查询里去重」比（两张表都还有重叠 part 的时候） ===
-  rmt          FINAL                  25 ms  17.13 MiB
-  rmt          自己 GROUP BY 去重 174 ms  1.01 GiB
-  rmt          自己 LIMIT 1 BY 去重 1298 ms  1.15 GiB
-  rmt_spread   FINAL                  50 ms  83.67 MiB
-  rmt_spread   自己 GROUP BY 去重 125 ms  1.14 GiB
-  rmt_spread   自己 LIMIT 1 BY 去重 1375 ms  1.15 GiB
-  · rmt：GROUP BY 去重的耗时是 FINAL 的 7 倍，内存是 60 倍
+  rmt          FINAL                  27 ms  17.13 MiB
+  rmt          自己 GROUP BY 去重 169 ms  1.01 GiB
+  rmt          自己 LIMIT 1 BY 去重 1287 ms  1.15 GiB
+  rmt_spread   FINAL                  47 ms  88.29 MiB
+  rmt_spread   自己 GROUP BY 去重 127 ms  1.14 GiB
+  rmt_spread   自己 LIMIT 1 BY 去重 1349 ms  1.15 GiB
+  · rmt：GROUP BY 去重的耗时是 FINAL 的 6 倍，内存是 60 倍
   [符合] rmt：FINAL 比自己 GROUP BY 去重省内存（差一个数量级以上，1 = 是）：1
   [符合] rmt：FINAL 比自己 GROUP BY 去重快（1 = 是）：1
-  · rmt_spread：GROUP BY 去重的耗时是 FINAL 的 2 倍，内存是 14 倍
+  · rmt_spread：GROUP BY 去重的耗时是 FINAL 的 3 倍，内存是 13 倍
   [符合] rmt_spread：FINAL 比自己 GROUP BY 去重省内存（差一个数量级以上，1 = 是）：1
   [符合] rmt_spread：FINAL 比自己 GROUP BY 去重快（1 = 是）：1
   · FINAL 能利用「每个 part 本来就按排序键有序」这件事，做的是流式归并；
@@ -63,7 +63,7 @@ split_parts_ranges_into_intersecting_and_non_intersecting_final	1
 === 五、OPTIMIZE FINAL 之后：重复行被物理去掉，FINAL 也没有东西要归并了 ===
   [符合] rmt 合并之后的 part 数：1
   [符合] rmt 不带 FINAL 也只剩去重后的行数：10000000
-  rmt          1 个 part → count() FINAL 中位 2 ms
+  rmt          1 个 part → count() FINAL 中位 4 ms
   [符合] rmt_spread 合并之后的 part 数：1
   [符合] rmt_spread 不带 FINAL 也只剩去重后的行数：10000000
   rmt_spread   1 个 part → count() FINAL 中位 2 ms

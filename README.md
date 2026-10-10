@@ -133,7 +133,7 @@ docs/                      日常排查用的知识和几个方案，索引在 d
 | 11 | `parts_to_delay_insert` / `parts_to_throw_insert` 的先后顺序；一条 INSERT 切成几个 part | `mechanism-map.md`、演练条目 | 阈值压到 20 / 25：被拒时正好 25 个 part，之前已拖慢 5 次；`INSERT … SELECT` 每 1111953 行一个 part，客户端发 TSV 每 1048449 行一个，几千行的小批就是一个 |
 | 12 | 单节点 Keeper 出事，集群退化成什么样 | `deployment-architecture.md` 第 2 条 | 停掉：副本立刻只读、读照常、写被拒，默认参数下一条 INSERT 最多卡约 142 秒才报错；**冻住：约 10 秒才转只读，客户端第 30 秒超时，Keeper 回来后服务端那条 INSERT 照样提交**；Keeper 回来十几秒内自愈 |
 | 13 | 误删之后各能救回什么 | `daily-checklist.md` 恢复动作 | `DETACH` 可逆；`DROP PARTITION` 没有后悔药，从 `FREEZE` 备份拷回 `detached/` 再 `ATTACH` 能还原到三个副本；`UNDROP` 在 480 秒内有效、`SYNC` 之后无效；先 `SYSTEM DROP REPLICA` 再 `UNDROP`，表回来是只读的，要 `SYSTEM RESTORE REPLICA`；大小阈值可以只对一条语句放开 |
-| 14 | `ReplacingMergeTree` + `FINAL` 到底贵在哪 | `deployment-architecture.md` 第 1 条 | 重投能被折叠；代价跟着「落在重叠区间里的行」走，不只看 part 数：重叠集中时 part 从 14 堆到 29，`count() FINAL` 从约 12 ms 涨到约 27 ms，仍比同样 14 个 part、重叠铺满的（约 46 ms）便宜；多 part 状态下手写 `GROUP BY` 去重的内存是 `FINAL` 的十几到几十倍，耗时是两倍到几十倍（这一项每轮波动大） |
+| 14 | `ReplacingMergeTree` + `FINAL` 到底贵在哪 | `deployment-architecture.md` 第 1 条 | 重投能被折叠；代价跟着「落在重叠区间里的行」走，不只看 part 数：重叠集中时 part 从 14 堆到 29，`count() FINAL` 从十几毫秒涨到二十几毫秒，仍比同样 14 个 part、重叠铺满的（45–50 ms）便宜；多 part 状态下手写 `GROUP BY` 去重的内存是 `FINAL` 的十几到几十倍，耗时是两倍到几十倍（这一项每轮波动大） |
 | 21 | 真的 Kafka Connect 超时重投，以及 `exactlyOnce` 管不管用 | `deployment-architecture.md` 第 1 条 | 服务端提交了、客户端超时，框架等到下一个 offset 提交点（这次约 55 秒后）原样重投，token 不变：窗口在就拦下，窗口认不出就第二份落地，**开了 `exactlyOnce` 也一样**；worker 崩溃后重投、批次边界变了，窗口在也拦不住，只有 `exactlyOnce` 拦得住 |
 | 23 | `exactlyOnce` 的状态和新来的一批对不上时，task 会不会停、数据会不会丢 | 实验 21 只造过「重读的一批越过记录区间」那一支 | 崩溃前提交点之后写过不止一批（生产上几乎每次崩溃都是）：默认 `errors.tolerance=none` 下重启后 task `FAILED`（`State MISMATCH`），没多写、数据还在 Kafka，打开 `tolerateStateMismatch` 才自己恢复；`errors.tolerance=all` 下 task 不停，已经写过的那几批整批进 DLQ。插入在服务端没提交、客户端只看到超时，之后批次边界又变了：`none` 下 task `FAILED`（`State CONTAINS`），`tolerateStateMismatch` 管不到，要删状态行；**`all` 加 DLQ，这一段只剩 DLQ 里那一份；`all` 不配 DLQ，这一段丢了、offset 照常提交** |
 
@@ -143,7 +143,7 @@ docs/                      日常排查用的知识和几个方案，索引在 d
 |---|---|---|
 | 24 | 物化视图能不能跟着源表去重 | `deduplicate_blocks_in_dependent_materialized_views` 默认 0 时，源表拦下的重投物化视图照样再算一次（25.3 源码说明写的是相反的）；设成 1 才跟着拦，而且要对所有写入一律设、目标表自己的窗口也要盖住重投；设成 1 不会误伤不同的源批次，但不能和 `async_insert` 一起开（直接报错）。窗口外的重放和「重发新版本」式的改数据，明细 `FINAL` 是对的，物化视图多算，合并之后也不会变回来 |
 | 25 | 报表怎么发现漂移、怎么安全地重算、时区怎么上卷 | 三种重复和改数据让报表偏的量和注入的一致，按天对账准确找出偏了的天；从明细 `FINAL` 重算一天再 `REPLACE PARTITION`，三个副本逐桶一致；不过闸会把重算期间的迟到写入抹掉。30 分钟桶对上海、加尔各答（+5:30）、纽约（含夏令时那天）上卷全对，加德满都（+5:45）对不上 |
-| 26 | 大查询限 `max_threads` 的效果和代价 | 限 N 就不超过 N 个核；报表重算本来只用 2 个核左右，限到 2 只慢 16%–37%；能并行的大聚合限到 2 慢 3.6 倍（12 CPU 的虚拟机上）；不限线程的重算跑着时，同节点小批写入的 p95 是 33–69 ms，限 2 之后 9–19 ms（只记录、不断言，4 次运行方向一致） |
+| 26 | 大查询限 `max_threads` 的效果和代价 | 限 N 就不超过 N 个核；报表重算本来只用 2 个核左右，限到 2 只慢 6%–39%；能并行的大聚合限到 2 慢 3.6 倍（12 CPU 的虚拟机上）；不限线程的重算跑着时，同节点小批写入的 p95 是 33–69 ms，限 2 之后 9–19 ms（只记录、不断言，5 次运行方向一致） |
 | 27 | 明细表在线换成 `ReplicatedReplacingMergeTree` | `Replicated` 库里：`ATTACH` 搬历史写 0 行；停了 merge 的表，有可合并的 part 时复制队列不会归零，排空要用 `SYNC REPLICA … LIGHTWEIGHT`；停 sink、排空、按 `part_log` 补齐、按 `system.parts` 行数过闸之后 `EXCHANGE`，sink 写的每个 offset 恰好一份、物化视图跟着名字走；不排空就切换会把在途的那批写进旧表；同名 `UNION ALL` 视图不能写；回滚之后一行不丢，回滚的闸要拿执行 `REPLACE` 的副本当基准，各副本各比各的会误报 |
 
 还没做的实验也记在 `docs/` 里，按编号找：

@@ -22,6 +22,7 @@
 | 明细表在线换成 `ReplicatedReplacingMergeTree` | [docs/engine-migration-runbook.md](docs/engine-migration-runbook.md) | 27 |
 | 巡检、误删之后怎么救 | [docs/daily-checklist.md](docs/daily-checklist.md) | 07、11、13 |
 | 每个实验跑没跑过、过没过 | [docs/Test-Report.md](docs/Test-Report.md) | 全部 |
+| 接下来要做的事：规模验证、生产只读核对、要业务拍板的 | [docs/follow-ups.md](docs/follow-ups.md) | — |
 
 ## 跑起来
 

@@ -15,7 +15,7 @@
 | 库引擎 | 定了：用 `Replicated` 库，和生产一致。lab 上验过能建，行为见 [production-shape.md 第一节](production-shape.md#lab-上的-replicated-库) |
 | 脚本 | 没写，清单见第八节 |
 | 生产的校准数据 | 没拉。P1 可以先跑；**P2 之前必须拿到 Aiven 改过的设置**，见 [production-shape.md 第八节](production-shape.md#八还缺的生产数据怎么只读地拿) |
-| 机器 | 没定，规格见第三节 |
+| 机器 | 大部分阶段放在 128 GB 的 Mac Studio 上，哪些放得下见 [follow-ups.md](follow-ups.md#一在-mac-studio128-gb上做的规模验证)；B 档三副本（P4、P5）要云主机。规格见第三节 |
 
 拿到大机器之后的顺序：
 
@@ -76,6 +76,7 @@ review 文档的假设编号是 H1–H12，这里用 S 开头：
 - **宿主机最好是 Linux。** macOS 上 Docker 跑在虚拟机里，内存和盘的上限是虚拟机的配置，要先调大。
 - **三副本挤在一台机器上，耗时更不能比。** 三份数据写同一块盘，merge 也是三个副本各做各的（ReplicatedMergeTree 默认如此），磁盘 IO 是生产单个节点的三倍。
 - **容器限额的作用。** 限 CPU 和内存，是为了让 ClickHouse 看到和生产节点一样的资源：它按 cgroup 限额算 `max_threads` 和 `max_server_memory_usage`（推断，P0 要验，第六节）。
+- **CPU 限额不能超过虚拟机的核数。** Docker 直接拒绝（lab 上试过：12 核的虚拟机上 `--cpus 16` 报 `range of CPUs is from 0.01 to 12.00, as there are only 12 CPUs available`）。虚拟机不到 16 核时，B 档的容器只能限到虚拟机的核数，再显式设 `max_threads = 16`，让查询的并行度和生产对齐（推断：每个线程各攒一份哈希表，内存跟着线程数走；耗时会偏慢）。
 
 ## 四、造数据
 

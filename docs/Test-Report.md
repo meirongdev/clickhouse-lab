@@ -25,6 +25,8 @@
 
 ## 这些实验推不出的
 
+要补的验证集中记在 [follow-ups.md](follow-ups.md)。
+
 - **生产量级的绝对耗时、内存、磁盘。** lab 一天最多几千万行，生产是一天两亿到三亿行的宽表。计划见待建实验 15、22（[plan-scale-dedup.md](plan-scale-dedup.md)）。
 - **对象存储。** 冷层分区上 `ATTACH`、`REPLACE`、`FINAL` 怎么走，lab 没挂对象存储。
 - **托管层。** 包括：

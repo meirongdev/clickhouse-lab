@@ -15,6 +15,7 @@
 | `report-pipeline.md` | 报表链路：明细和报表表怎么建、哪些重复会让物化视图喂的报表多算、对账和带闸的重算、按时区上卷、重算时限线程（实验 24、25、26） |
 | `engine-migration-runbook.md` | 明细表在线换成 `ReplicatedReplacingMergeTree`：`ATTACH` 搬历史、停写补齐、行数闸、`EXCHANGE` 切换、回滚（实验 27） |
 | `Test-Report.md` | 全部实验的通过情况（由 `./report.sh` 从 `results/` 生成）和业务场景到实验的对照 |
+| `follow-ups.md` | 还没做完的事：在 128 GB 的 Mac Studio 上做的规模验证、生产上只读要拿的数据、要和业务定的口径、lab 上还能补的小实验 |
 
 ## 标注约定
 

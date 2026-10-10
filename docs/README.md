@@ -25,7 +25,7 @@
 ## 第四卷：验证与兜底兜底 (Validation & Runbooks)
 空谈架构是不够的，必须要有坚实的数据跑测和出事后的回滚方案。
 * [**全量本地压测报告 (Test Report)**](./Test-Report.md)
-  > 涵盖了库中全部 26 个故障注入与功能验证脚本在当前环境的通过情况，确保架构不仅“理论可行”还能“实操不崩”。
+  > 涵盖了库中全部 27 个故障注入与功能验证脚本在当前环境的通过情况，确保架构不仅“理论可行”还能“实操不崩”。
 * [**去重与副本修复方案 (dedup-solution.md)**](./dedup-solution.md)
   > 标准的生产应急 Runbook：演示如何在极度污染的情况下，利用底层的硬链接特性 (`ATTACH / REPLACE PARTITION`) 实现 PB 级数据的秒级全量回滚。
 * [**引擎平滑升级与亿级数据割接指南 (engine-migration-runbook.md)**](./engine-migration-runbook.md)

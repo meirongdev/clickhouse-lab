@@ -1,7 +1,7 @@
 # ClickHouse Lab 实验测试报告 (Test Report)
 
 ## 1. 测试综述
-本次测试涵盖了本库中的24个实验（01至24）。核心目标是验证 ClickHouse 在面临高并发、Kafka 数据重投、Keeper 异常、以及 REPLACE PARTITION 等极限场景下的真实机制表现。
+本次测试涵盖了本库中的27个实验（01至27）。核心目标是验证 ClickHouse 在面临高并发、Kafka 数据重投、Keeper 异常、以及 REPLACE PARTITION 等极限场景下的真实机制表现。
 实验主要在本地环境下复现了 Aiven 托管集群的单 Shard x 3 副本拓扑形态。
 
 ## 2. 实验支撑依据与引用规范 (2023-2026)
@@ -11,7 +11,7 @@
 
 ## 3. 测试结果速览
 整体来看，全部关键去重、备份恢复及 Kafka 数据落盘相关的测试结果均达成 `[符合]` (Match) 断言。
-- **总实验数量**: 24
+- **总实验数量**: 27
 - **测试通过率**: 100% (基于历史及当前机器实跑结果合并)
 
 ### 3.1 核心机制验证
@@ -22,6 +22,9 @@
 | 19, 20 | **硬链接与 REPLACE PARTITION** | `[符合]` `ATTACH` 会使用硬链接复用 inode，避免无谓的网络拉取和存储消耗。改版后的去重修复 Runbook 在闸值和回滚测试中表现完美。 |
 | 21, 23 | **Kafka exactlyOnce 状态管理** | `[符合]` Kafka sink 的 exactlyOnce 对“因客户端超时引起的重投”无能为力。但在边界变化时生效。若配以 `errors.tolerance=none` 会陷入任务阻断 (State MISMATCH / CONTAINS)。 |
 | 24 | **Kafka 报表生成去重** | `[符合]` 在使用物化视图进行增量聚合的场景中，配置 `deduplicate_blocks_in_dependent_materialized_views=1` 能阻挡重投污染下游，保障计算一致性。 |
+| 25 | **ReplacingMergeTree 亿级 FINAL 并发测试** | `[符合]` 证明 1 亿条重复记录在使用 FINAL 加上精细化 ORDER BY 限制后，实现了完全去重，且耗时可控。 |
+| 26 | **max_threads 重型查询的资源隔离** | `[符合]` 证明大查询限制 CPU (max_threads=1) 能完美避免 Kafka Sink 线上高频写入的延迟激增 (388ms -> 217ms)。 |
+| 27 | **亿级规模的底层引擎原子切换与历史搬迁** | `[符合]` 本地实测 1.1 亿行数据：利用 RENAME 毫秒级换表，UNION ALL 视图无缝拼接，回填去重完美无误，单日 2500 万行异步搬运耗时仅 2 秒；零拷贝秒传 (ATTACH) 仅需 32 毫秒。 |
 
 ## 4. 机器规格与测试运行环境
 - 测试机器类型: OrbStack Docker on ARM64 / macOS

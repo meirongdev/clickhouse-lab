@@ -23,8 +23,9 @@
 
 ### 阶段四：实战跑测与运维兜底 (Operations & Runbooks)
 *落地到生产，如何证明它可行？出了事怎么救？*
-* [**全量本地压测验证报告 (Test Report)**](docs/Test-Report.md)：在当前环境实跑 25 个实验的完整功能验证报告，用数据证明架构的稳健。
+* [**全量本地压测验证报告 (Test Report)**](docs/Test-Report.md)：在当前环境实跑 26 个实验的完整功能验证报告，用数据证明架构的稳健。
 * [**去重与副本修复方案 (Runbook)**](docs/dedup-solution.md)：当遇到无可挽回的数据污染时，如何利用底层硬链接特性（`ATTACH/REPLACE PARTITION`）做到秒级无损回滚。
+* [**生产级高可用：异常处理、隔离与容量规划**](docs/ops-resilience-scaling.md)：详解四大异常的处理手段，验证 `max_threads` 对大查询的隔离保护，并给出未来迈入 10 亿量级的硬件扩容基线。
 
 ---
 

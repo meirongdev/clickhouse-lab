@@ -14,6 +14,7 @@
 
 ### 阶段二：底层机制与原理解构 (Deconstructing Mechanics)
 *ClickHouse 到底是怎么运作的？不要靠猜，看实测数据。*
+* [**核心表引擎原理与选型白皮书**](docs/engine-selection-guide.md)：详述 `MergeTree` 家族四大核心引擎的适用场景，揭秘 3 节点高可用架构下 `Replicated` 复制层的工作原理。
 * [**MergeTree 机制映射与默认参数全览**](docs/mechanism-map.md)：带你透视 ClickHouse 源码，理解去重窗口、Merge 裁剪周期等生死攸关的参数。
 * [**自动化极限实验库 (Experiments)**](experiments/)：包含 25 个自动化脚本，亲眼见证并发换分区、宕机断网、脏数据注入时引擎的真实反应。
 

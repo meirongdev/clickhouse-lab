@@ -12,6 +12,8 @@
 
 ## 第二卷：探究机制 (Mechanisms & Theory)
 在设计最终方案前，我们先通过一系列“拆解”实验，摸透了 ClickHouse 的脾气。
+* [**ClickHouse 核心表引擎原理与选型白皮书 (engine-selection-guide.md)**](./engine-selection-guide.md)
+  > **架构基石！** 系统性剖析 `MergeTree` 家族四大核心引擎（基础、替换、聚合、折叠）的适用场景，并揭秘 3 节点高可用架构下 `Replicated` 复制壳的工作机制。
 * [**MergeTree 底层参数与机制映射表 (mechanism-map.md)**](./mechanism-map.md)
   > 深入源码级配置，剖析为什么默认的块级去重窗口只有 8 秒，以及 Zookeeper 副本同步的心跳规律。
 

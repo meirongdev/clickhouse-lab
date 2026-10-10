@@ -58,6 +58,7 @@ SQL 见 [production-shape.md 第八节](production-shape.md#八还缺的生产�
 - [ ] `part_log` 开没开、留几天：报表重算的闸、换引擎的补齐都靠它。
 - [ ] 权限：`SYSTEM STOP MERGES`（换引擎依赖它）、`system.zookeeper`、`clusterAllReplicas` 能不能用。
 - [ ] Confluent Cloud 上 sink 的 `tasks.max`、错误处理和 DLQ 配置；上游 producer 的幂等配置。
+- [ ] Confluent Cloud 上能不能调 sink 消费端的攒批（`fetch.min.bytes`、`fetch.max.wait.ms` 之类）。每批攒大，新 part 少、Keeper 负担轻，同样的去重窗口能盖更久（推断，见 [concepts.md 第八节](concepts.md#八复制和-keeper)）；代价是数据晚一点可见。别用 connector 自己的 `bufferCount`：它会改批次边界，开着 `exactlyOnce` 时直接被拒。
 
 ## 三、要和业务定的
 

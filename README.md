@@ -15,6 +15,7 @@
 
 | 要做的事 | 看哪份 | 依据的实验 |
 |---|---|---|
+| 先弄懂 ClickHouse 怎么工作：part、merge、复制、物化视图 | [docs/concepts.md](docs/concepts.md) | 03、08、11、14、20、24 |
 | 排查行数多了、少了、不对 | [docs/data-problems.md](docs/data-problems.md)、[docs/mechanism-map.md](docs/mechanism-map.md) | 02、03、09、10、12、21、23 |
 | 定去重方案：为什么不靠 `exactlyOnce`、六项措施 | [docs/dedup-solution.md](docs/dedup-solution.md) | 02、14、21、23、24、27 |
 | 清理已经写进去的重复行 | [docs/review-dedup-replace-plan.md](docs/review-dedup-replace-plan.md) | 16–20 |

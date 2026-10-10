@@ -4,6 +4,7 @@
 
 | 文件 | 干什么用 |
 |---|---|
+| `concepts.md` | ClickHouse 怎么工作：写入怎么变成 part、part 长什么样、分区、怎么读、merge、MergeTree 家族、复制和 Keeper、物化视图、改删数据，每一节对到这套生产和仓库里的实验 |
 | `mechanism-map.md` | 症状往机制上收敛的那张表，外加每个默认值的出处（ClickHouse 和 Kafka Connect 两侧） |
 | `data-problems.md` | 多了 / 少了 / 不对三类问题的排查顺序，含对账口径 |
 | `daily-checklist.md` | 固定跑的巡检、出事时的恢复动作、需要演练的条目 |

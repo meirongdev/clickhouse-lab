@@ -1,4 +1,4 @@
-# 跑于 2026-10-10 00:36:03 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 6be142c+改动
+# 跑于 2026-10-10 19:16:22 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 94c06b8+改动 | SLOW=1
 
 === 准备：一张普通的复制表，Keeper 还在的时候写得进去 ===
   · Keeper 的形状（四字命令 mntr）：zk_server_state=standalone zk_followers=0 
@@ -22,7 +22,10 @@ insert_keeper_retry_max_backoff_ms	10000
   INSERT 卡了约 1s 才返回，报错原文：
     Code: 242. DB::Exception: Table is in readonly mode: replica_path=/ch/tables/01/keeper_outage/replicas/ch1. (TABLE_IS_READ_ONLY) (version 25.3.14.14 (
   [符合] 报的是 TABLE_IS_READ_ONLY
-  · Keeper 拉回来之后，副本自己退出 readonly 用了约 4s，没做任何人工干预
+  · （SLOW）按默认的 20 次重试实测一次，看是不是真卡满约 142 秒才报错：
+  INSERT 卡了约 142s 才返回：Code: 242. DB::Exception: Table is in readonly mode: replica_path=/ch/tables/01/keeper_outage/replicas/ch1. (T
+  [符合] 实测卡的秒数和退避公式算出来的差不到 10 秒（1 = 是）：1
+  · Keeper 拉回来之后，副本自己退出 readonly 用了约 12s，没做任何人工干预
   [符合] is_readonly 回到 0：0
   [符合] 写入恢复（空 = 成功）：
   · 三副本行数追平用了约 0s
@@ -32,7 +35,7 @@ insert_keeper_retry_max_backoff_ms	10000
 === 二、Keeper 卡住（docker pause）：客户端 30 秒超时之后，那条 INSERT 后来还落不落地 ===
   · 进程冻住、连接不断，请求发出去没有回音。客户端照生产的 Connect 设 30 秒超时（curl -m 30）
   · 这条 INSERT 带一个 insert_deduplication_token，和 Connect 一样：重投时 token 不变
-  · 冻住之后约 11s 副本才转 readonly：要等发出去的 Keeper 请求超时，不像停掉那样当场知道
+  · 冻住之后约 10s 副本才转 readonly：要等发出去的 Keeper 请求超时，不像停掉那样当场知道
   [符合] 冻住时副本不是立刻转 readonly（> 4 秒，1 = 是）：1
   · 客户端：curl 退出码 28，用了 30s（28 = 超时）
   [符合] 客户端在第 30 秒超时放弃（curl 退出码 28）：28
@@ -41,7 +44,7 @@ insert_keeper_retry_max_backoff_ms	10000
   [符合] 解冻后那条 INSERT 自己落地了（客户端早就放弃了）：1
 type	query_duration_ms	written_rows	exception_code
 QueryStart	0	0	0
-QueryFinish	42722	1	0
+QueryFinish	42757	1	0
   [符合] 服务端那边这条 INSERT 是正常结束的：QueryFinish、写入 1 行、没有报错、耗时超过 30 秒（1 = 是）：1
   · HTTP 客户端断开不会取消一条正在执行的 INSERT（只有只读查询才可能因为客户端断开被取消），
   · 所以对客户端是「超时失败」，对服务端是「成功提交」。框架这时候原样重投，就是第二次提交
@@ -54,3 +57,4 @@ QueryFinish	42722	1	0
   · 所以它不是「数据会坏」的风险，是「写入全停」的风险。更麻烦的是卡住而不是停掉：客户端超时、
   · 服务端晚到提交，两边对「这批写没写进去」的判断不一致，重投就从这里来。
   · 生产上要 3 节点 Keeper 的理由就在这里：少一台还能写，而不是整个集群转成只读。
+# 退出码 0

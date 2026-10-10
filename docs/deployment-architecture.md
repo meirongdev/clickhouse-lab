@@ -57,8 +57,8 @@ zk_synced_followers 0
 |---|---|---|
 | 副本转 `is_readonly` | 立刻（首次轮询就已经是 1） | 约 10 秒后：要等发出去的 Keeper 请求超时（ZooKeeper 客户端默认 `operation_timeout_ms` = 10000） |
 | 期间 `SELECT` | 照常返回，读不碰 Keeper | 同左 |
-| 期间 `INSERT` | 重试到上限后报 `Code: 242 TABLE_IS_READ_ONLY`：默认 `insert_keeper_max_retries=20`，退避加起来 142.7 秒，`SLOW=1` 实测卡了 143 秒 | 客户端 30 秒超时断开；**Keeper 一回来，服务端那条 INSERT 照常提交** |
-| Keeper 恢复之后 | 几秒内自己退出 readonly，无需人工干预，被拒的那几条不会补写 | 同左；晚到提交的那条已经在表里了 |
+| 期间 `INSERT` | 重试到上限后报 `Code: 242 TABLE_IS_READ_ONLY`：默认 `insert_keeper_max_retries=20`，退避加起来 142.7 秒，`SLOW=1` 实测卡了 142–143 秒 | 客户端 30 秒超时断开；**Keeper 一回来，服务端那条 INSERT 照常提交** |
+| Keeper 恢复之后 | 十几秒内自己退出 readonly（几次实跑 2–12 秒），无需人工干预，被拒的那几条不会补写 | 同左；晚到提交的那条已经在表里了 |
 
 所以单点 Keeper 的风险不是「数据会坏」，是**写入全停**；更麻烦的是卡住而不是停掉：客户端以为写失败了、服务端其实写进去了，重投就从这里来。lab 里单点是刻意的，生产上不行，见第二节第 2 条。
 
@@ -107,18 +107,18 @@ docker exec ch1 bash -c 'exec 3<>/dev/tcp/keeper/9181 && printf mntr >&3 && time
 结构性的解法，按代价从低到高：
 
 - **下游对账常态化。** `count() - uniqExact(key)` 已经是现成口径（`data-problems.md`），把它做成定时任务而不是事后排查手段。这条今天就能做。注意口径里必须是 `uniqExact`：`uniq` 在 1000 万基数上实测偏 −0.16%，而且误差两个方向都有（lab 实测，实验 10）。
-- **`clickhouse-kafka-connect` 的 `exactlyOnce` 解决不了这一类。** 它默认 `false`（已核，`ClickHouseSinkConfig.java:78`）。实验 21 量过：生产那种「同一批原样重投」，开了 `exactlyOnce` 照样第二份落地——它的状态停在「写了一半」时遇到同一区间，源码就是再写一遍、交给 ClickHouse 去重（`Processing.java:186`）。它真正防的是 worker 崩溃或 rebalance 之后批次边界变了的重投，那种重投连窗口都认不出来（token 变了），实验 21 第二段里 `exactlyOnce=false` 的那张表窗口还在照样重复。所以它值得开，但开它不等于这条链修好了，而且要连着几样一起配（lab 实测，实验 23）：崩溃之前提交点之后写过不止一批时（生产上每个分区两次提交之间要写一万多到几万条，几乎每次崩溃都是，推断），重启后重读的第一批落在记录区间之前，默认配置下 task 直接 `FAILED`（`State MISMATCH`），要 `tolerateStateMismatch=true` 才会自己跳过；插入结果不明、批次边界又变了的那一段，状态机不重插，`errors.tolerance=none` 时 task 停下等人删状态行，`all` 时只剩 DLQ 里那一份，不配 DLQ 就丢了。状态本身存在 KeeperMap 里：Aiven 在自家 sink 文档里写明 ClickHouse 服务从备份恢复、关机或 fork 之后不保证 exactly-once（已核，[Aiven 文档](https://aiven.io/docs/products/kafka/kafka-connect/howto/clickhouse-sink-connector) 的 Limitations）；`Replicated` 库的副本走 `recoverLostReplica` 时，26.8 上复现过把分叉的 KeeperMap 表 DROP 掉、Keeper 里的数据一起清空（已核，[ClickHouse #111957](https://github.com/ClickHouse/ClickHouse/issues/111957)，[PR #122917](https://github.com/ClickHouse/ClickHouse/pull/122917) 修复），25.3 的 `DatabaseReplicated.cpp` 里同一个分支还在（[L1404–1409](https://github.com/ClickHouse/ClickHouse/blob/v25.3.14.14-lts/src/Databases/DatabaseReplicated.cpp#L1404-L1409)），会不会真清空还要看这个副本是不是最后一个登记者（待一手观察）。Keeper 抖动时状态表本身的读写会怎样，仍然没验（见第三节第 1 条）。
-- **`ReplacingMergeTree` + 版本列**，查询侧带 `FINAL` 或用物化视图收敛。重投只是多一份待合并的行，不会变成对账差异——这条量过了（lab 实测，实验 14）：1000 万行里混进 50 万行重投，物理行数是 1050 万，`FINAL` 读出来正好 1000 万。代价方面三个结论：
+- **`clickhouse-kafka-connect` 的 `exactlyOnce` 解决不了这一类。** 它默认 `false`（已核，`ClickHouseSinkConfig.java:78`）。实验 21 量过：生产那种「同一批原样重投」，开了 `exactlyOnce` 照样第二份落地——它的状态停在「写了一半」时遇到同一区间，源码就是再写一遍、交给 ClickHouse 去重（`Processing.java:186`）。它真正防的是 worker 崩溃或 rebalance 之后批次边界变了的重投，那种重投连窗口都认不出来（token 变了），实验 21 第二段里 `exactlyOnce=false` 的那张表窗口还在照样重复。所以它值得开，但开它不等于这条链修好了，而且要连着几样一起配（lab 实测，实验 23）：崩溃之前提交点之后写过不止一批时（生产上每个分区两次提交之间要写一万多到几万条，几乎每次崩溃都是，推断），重启后重读的第一批落在记录区间之前，默认配置下 task 直接 `FAILED`（`State MISMATCH`），要 `tolerateStateMismatch=true` 才会自己跳过；插入结果不明、批次边界又变了的那一段，状态机不重插，`errors.tolerance=none` 时 task 停下等人删状态行，`all` 时只剩 DLQ 里那一份，不配 DLQ 就丢了。状态本身存在 KeeperMap 里：Aiven 在自家 sink 文档里写明 ClickHouse 服务从备份恢复、关机或 fork 之后不保证 exactly-once（已核，[Aiven 文档](https://aiven.io/docs/products/kafka/kafka-connect/howto/clickhouse-sink-connector) 的 Limitations）；`Replicated` 库的副本走 `recoverLostReplica` 时，26.8 上复现过把分叉的 KeeperMap 表 DROP 掉、Keeper 里的数据一起清空（已核，[ClickHouse #111957](https://github.com/ClickHouse/ClickHouse/issues/111957)，[PR #122917](https://github.com/ClickHouse/ClickHouse/pull/122917) 修复），25.3 的 `DatabaseReplicated.cpp` 里同一个分支还在（[L1356–1361](https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Databases/DatabaseReplicated.cpp#L1356-L1361)），会不会真清空还要看这个副本是不是最后一个登记者（待一手观察）。Keeper 抖动时状态表本身的读写会怎样，仍然没验（见第三节第 1 条）。
+- **`ReplacingMergeTree` + 版本列**，查询侧带 `FINAL`。重投只是多一份待合并的行，不会变成对账差异——这条量过了（lab 实测，实验 14）：1000 万行里混进 50 万行重投，物理行数是 1050 万，`FINAL` 读出来正好 1000 万。代价方面三个结论：
 
   | 量的是什么 | 结果 |
   |---|---|
   | 代价随查询形状 | `count()` 最惨：不带 `FINAL` 只读元数据的 1 行，带上就得扫完整表。走排序键的范围查询贵一倍上下 |
-  | 代价随重叠 | 跟着「落在互相重叠的区间里的行」走，不是单纯跟着 part 数：重叠集中在一小段键上时，part 从 14 个堆到 29 个耗时不变；同样 14 个 part、重叠铺满整个键范围时贵两三倍；合成 1 个 part 之后没有重叠，退化成普通读取 |
-  | 和自己去重比 | 在还有重叠 part 的时候，自己 `GROUP BY` 去重的内存是 `FINAL` 的十几到几十倍，耗时是几倍到几十倍（重叠集中时差距最大、铺满时最小；耗时每轮波动大，几轮实跑在 3 倍到 51 倍之间）；`LIMIT 1 BY` 跟它差不多或更慢 |
+  | 代价随重叠 | 跟着「落在互相重叠的区间里的行」走，不是单纯跟着 part 数：重叠集中在一小段键上时，part 从 14 个堆到 29 个，耗时翻了一倍（约 12 → 27 ms），仍比同样 14 个 part、重叠铺满整个键范围的便宜（约 46 ms，是重叠集中时的三四倍）；合成 1 个 part 之后没有重叠，退化成普通读取 |
+  | 和自己去重比 | 在还有重叠 part 的时候，自己 `GROUP BY` 去重的内存是 `FINAL` 的十几到几十倍，耗时是两倍到几十倍（重叠集中时差距最大、铺满时最小；耗时每轮波动大，几轮实跑在 2 倍到 51 倍之间）；`LIMIT 1 BY` 跟它差不多或更慢 |
 
   每次跑的具体毫秒数都会变，确切数字看 `results/14-replacing-final-cost.log` 那一轮的记录，这里只留量级。早期版本这里写的是「`OPTIMIZE` 之后快五到七倍」「比手写去重便宜两个数量级」：那两个数都是拿合并成 1 个 part、已经没有东西要归并的 `FINAL` 去比的，不公平，已经按上表改掉。
 
-  最后一行值得单说：「`FINAL` 太贵别用」这句话得分清跟谁比。跟「不去重」比它确实贵，跟「自己在查询里去重」比它便宜得多，内存差一个数量级以上——因为它能利用每个 part 本来就按排序键有序这件事，做归并而不是重新攒哈希表。按时间排序、只重投最近一批的表，重叠天然是集中的，正好落在便宜的那一头。真正的替代品是物化视图，不是手写去重。**绝对耗时别外推**：这些是 1000 万行、这台机器上的数，生产那张表是单日两亿行（待一手观察）。
+  最后一行值得单说：「`FINAL` 太贵别用」这句话得分清跟谁比。跟「不去重」比它确实贵，跟「自己在查询里去重」比它便宜得多，内存差一个数量级以上——因为它能利用每个 part 本来就按排序键有序这件事，做归并而不是重新攒哈希表。按时间排序、只重投最近一批的表，重叠天然是集中的，正好落在便宜的那一头。要省掉 `FINAL` 的读代价，靠的是增量聚合的报表表，不是手写去重；但物化视图喂的报表看不到合并，窗口外的重复和改数据会让它多算，要能对账、重算（实验 24、25，见 [report-pipeline.md](report-pipeline.md)）。**绝对耗时别外推**：这些是 1000 万行、这台机器上的数，生产那张表是单日两亿行（待一手观察）。
 
 拓扑怎么改都消不掉这一类问题，这条才是。落到这套生产上的具体做法（六项措施、上线顺序、出处和验证计划）记在 [dedup-solution.md](dedup-solution.md)。
 
@@ -135,7 +135,7 @@ lab 里 standalone 无所谓，生产不行：既是单点，又没有 quorum。
 
 ### 3. 什么时候才分片 —— 适用：两者
 
-现在是单日分区两亿行、30 GiB（生产事实）。**别急着分片**：分片的代价（Distributed 表、重平衡、跨分片 JOIN、没有分布式事务）比纵向扩容大得多。触发信号是单节点存不下全量，或者单节点吃不下写入/merge 增量。在那之前优先：
+现在文章里那个 region 是单日分区两亿行、30 GiB（生产事实）；核过的 region 里最大的一天三亿多行（production-shape.md 第二节的 C 档）。**别急着分片**：分片的代价（Distributed 表、重平衡、跨分片 JOIN、没有分布式事务）比纵向扩容大得多。触发信号是单节点存不下全量，或者单节点吃不下写入/merge 增量。在那之前优先：
 
 1. 纵向加机器（CPU / NVMe）
 2. tiered storage 到对象存储 + 本地 cache（文章一那个 856 GiB 分区就是这个场景）
@@ -172,17 +172,17 @@ lab 里一个都没有：RBAC 与 TLS、profile 兜底（`max_memory_usage`、`m
 
 ### 待建实验 15：单个日分区 5 亿行的 FINAL 代价
 
-实验 14 的结论卡在 1000 万行这个规模上，而生产是单日分区两亿行、30 GiB。把规模推到 5 亿行能把「倍数关系能带走、绝对耗时不能」这句话往前推一大截。可行性先算过了（lab 实测的单位成本：1000 万行 = 160 MiB / 1 秒）：
+实验 14 的结论卡在 1000 万行这个规模上，而生产是单日分区两亿行、30 GiB。把规模推到 5 亿行能把「倍数关系能带走、绝对耗时不能」这句话往前推一大截。可行性先算过了（lab 实测的单位成本：1000 万行落盘 160 MiB、写入约 1 秒，见实验 14 开头那行「单位成本」）：
 
 | | 5 亿行的推算 | 本机 |
 |---|---|---|
-| 磁盘，单副本 | ≈ 8 GB | 容器卷剩 368 GB，够 |
+| 磁盘，单副本 | ≈ 8 GB | 够：跑 `results/` 的那台，Docker 盘还剩 600 多 GB |
 | 磁盘，三副本各存全量 | ≈ 24 GB | 够 |
 | 写入耗时 | ≈ 50–100 秒，再加复制到另两个副本 | 够 |
 | 一条 INSERT 产生的 part 数 | ≈ 450（`INSERT … SELECT` 每 1111953 行一个，见 `mechanism-map.md`） | 停了 merge 的话要留意 `parts_to_delay_insert` = 1000 |
 | `FINAL` 查询内存 | 十几到几十 MiB，归并是流式的，不随行数暴涨 | 够 |
 
-**手写去重那一节到了这个量级会换一种结局**：实验 14 第四节那个「自己 `GROUP BY` 去重」在 1050 万行上用了 1.2–1.5 GiB（每轮有波动），按去重键数线性外推，5 亿行要 ≈ 58–72 GiB，本机总共 16 GiB。但 25.3 默认 `max_bytes_ratio_before_external_group_by` / `_sort` = 0.5（[源码](https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Core/Settings.cpp#L2420-L2448)，lab 上查过），用到一半可用内存就开始落盘，所以预期不是 `MEMORY_LIMIT_EXCEEDED`，而是落盘之后慢下来（早期版本这里写的「必然内存超限」是错的）。那一节到了这个量级要改成：记录 `FINAL` 的耗时，再记录手写去重落盘的字节数和耗时——在生产量级上，手写去重不是做不到，是贵得多（待一手观察）。
+**手写去重那一节到了这个量级会换一种结局**：实验 14 第四节那个「自己 `GROUP BY` 去重」在 1050 万行上用了 1.0–1.5 GiB（每轮有波动），按去重键数线性外推，5 亿行要 ≈ 48–71 GiB，而 lab 的 Docker 虚拟机总共 16 GiB。但 25.3 默认 `max_bytes_ratio_before_external_group_by` / `_sort` = 0.5（[源码](https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Core/Settings.cpp#L2420-L2448)，lab 上查过），用到一半可用内存就开始落盘，所以预期不是 `MEMORY_LIMIT_EXCEEDED`，而是落盘之后慢下来（早期版本这里写的「必然内存超限」是错的）。那一节到了这个量级要改成：记录 `FINAL` 的耗时，再记录手写去重落盘的字节数和耗时——在生产量级上，手写去重不是做不到，是贵得多（待一手观察）。
 
 实现上按实验 13 的 `SLOW=1` 那个路子做成 opt-in，别让 `run-all` 默认多跑十几分钟：
 
@@ -191,7 +191,7 @@ ROWS=${ROWS:-10000000} bash experiments/14-replacing-final-cost.sh   # 默认
 ROWS=500000000        bash experiments/14-replacing-final-cost.sh   # 大规模
 ```
 
-**即便跑到 5 亿行，仍然到不了生产**（待一手观察）：本地这张表是 6 列窄表、未压缩约 36 字节/行，生产的 schema 宽得多。`FINAL` 的开销花在按排序键归并和读取参与合并的列上，行越宽单行成本越高，所以本地的绝对耗时大概率仍然偏乐观。
+**即便跑到 5 亿行，仍然到不了生产**（待一手观察）：本地这张表是 6 列窄表、未压缩约 38 字节/行，生产的 schema 宽得多。`FINAL` 的开销花在按排序键归并和读取参与合并的列上，行越宽单行成本越高，所以本地的绝对耗时大概率仍然偏乐观。
 
 3. **Keeper 放在哪台机器上**（待一手观察）：3 节点容 1 台、`force_sync` 默认开、只有 local 盘保证持久化，这三条已经从官方页核过了（见第 2 条）；但「要不要和 CH 分机器」「小集群内嵌够不够」官方没给建议，得自己压一次才知道。实验 12 验的是「单点出事会怎样」，不是「几个节点才够」，这两件事别混。
 4. **ClickHouse Cloud 和 Altinity operator 的实际能力**（待核）：上表里那两行是道听途说，做选型决策之前必须自己核。

@@ -202,5 +202,3 @@ note "同一秒写进来的两份（DateTime 精度到秒时很常见）用 crea
 
 q1 "DROP TABLE IF EXISTS $T ON CLUSTER default SYNC" >/dev/null
 exit $FAILED
-#   - ClickHouse Official Documentation (2025/2026)
-#     https://clickhouse.com/docs/en/

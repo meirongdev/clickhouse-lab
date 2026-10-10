@@ -18,7 +18,7 @@
 |---|---|---|
 | 服务 | Aiven for ClickHouse，25.3.14.1 | 25.3.14.14，同一条 LTS |
 | 拓扑 | 1 shard × 3 replicas，每个节点存全量 | 同 |
-| 库引擎 | `Replicated`：DDL 自动传播到三个节点，不写 `ON CLUSTER`；建 `MergeTree` 会被改写成 `ReplicatedMergeTree` | 实验 01–21、23 用 `Atomic`，DDL 带 `ON CLUSTER default` 模拟。lab 也建得出 `Replicated` 库，实验 22 用它（见下一小节） |
+| 库引擎 | `Replicated`：DDL 自动传播到三个节点，不写 `ON CLUSTER`；建 `MergeTree` 会被改写成 `ReplicatedMergeTree` | 实验 01–26 用 `Atomic`，DDL 带 `ON CLUSTER default` 模拟。lab 也建得出 `Replicated` 库，实验 27 和待建实验 22 用它（见下一小节） |
 | 协调 | 每个节点同机跑一个 ZooKeeper，只在集群内可达 | 单独一个 Keeper 容器 |
 | 连接 | 一个 URL，连接随机落到任一节点 | 三个端口，用 `rr` 轮流打 |
 | 存储 | 每个节点一块网络块存储，加一层对象存储（tiered storage） | 只有本地盘 |
@@ -47,11 +47,13 @@ CREATE DATABASE <库名> ON CLUSTER default ENGINE = Replicated('/ch/databases/<
 | `ATTACH PARTITION … FROM` / `REPLACE PARTITION` | 不进库的复制日志（前后条数不变），只在发起的节点上执行（`query_log` 里只有 ch1 有这两条），另外两个副本靠表自己的复制拿到数据 | 和 `Atomic` 库一样，实验 17 关于 `alter_sync` 的结论照样成立 |
 | `DROP TABLE` 不带 `SYNC` | 三个节点的 `system.dropped_tables` 里都有，延迟删除和 `Atomic` 库一样 | 实验 07、13 的结论照样成立 |
 
+实验 27 在 `Replicated` 库里又断言了几条（lab 实测）：`ATTACH PARTITION … FROM` 只挂硬链接、写入 0 行；`EXCHANGE TABLES` 在三个副本上一起生效；挂在表上的物化视图跟着表名走，换名之后照常触发；切换时正在跑的 INSERT 会落进它开始时的那张表。
+
 还没验的（推断）：`Replicated` 库里的 DDL 默认要等所有副本应答。某个副本停了或者转了只读，建表会一直等到超时才返回，但活着的副本上表已经建好了，这时候重试会撞上「表已存在」。这一条不需要大规模，小规模就能验，见计划的 S12。
 
 ## 二、节点规格和数据量
 
-同一套业务有几个独立部署，单日数据量差一个多数量级，节点规格也不同。大规模实验按下面三档对齐：
+同一套业务按 region 分成几套独立部署，单日数据量差一个多数量级，节点规格也不同。大规模实验按下面三档对齐：
 
 | 档 | 每个节点 | 本地盘 | 单日分区 | 每个副本上一天落盘 |
 |---|---|---|---|---|
@@ -60,9 +62,10 @@ CREATE DATABASE <库名> ON CLUSTER default ENGINE = Replicated('/ch/databases/<
 | C | 8 vCPU / 32 GB | 5 TB 级 | 三亿多行 | ≈ 50 GB |
 
 - **C 是最紧的一档。** 单日数据量最大，内存却只有 B 的一半。
-- 根 README 里那句「单个日分区两亿行、30 GiB，每秒建 124 个块」，说的就是 B 档。
+- 根 README 里那句「单个日分区两亿行、30 GiB，每秒建 124 个块」，说的是 B 档那个 region 的一天。
 - 节点规格是 Aiven 套餐的标称值（已核，套餐信息导出）。
-- 单日行数来自生产 `part_log` 的写入速率和分区统计（生产事实）。每个副本一天落多少盘，是拿行数乘第四节的每行字节数算的（推断）。
+- 单日行数来自生产 `part_log` 的写入速率和分区统计（生产事实）。
+- 每个副本一天落多少盘：B 档的 30 GiB 是那个 region 一个日分区在生产上的实际大小（生产事实）；A、C 两档是拿行数乘第四节的每行字节数算的（推断）。
 - 另有一套部署也是 4 vCPU / 16 GB，CPU 峰值经常顶到 100%，单日量没核过（待核）。
 
 ## 三、存储：冷热分层
@@ -135,7 +138,7 @@ PRIMARY KEY (settle_ms, id)
 SETTINGS index_granularity = 8192;
 ```
 
-- **库引擎。** 上面是 `Atomic` 库的写法，实验 01–21 都按这个约定写。实验 22 在 `Replicated` 库里建表，要改两处：
+- **库引擎。** 上面是 `Atomic` 库的写法，实验 01–26 都按这个约定写。实验 22 在 `Replicated` 库里建表，要改两处：
   - 去掉 `ON CLUSTER default`；
   - 引擎写成不带参数的 `ENGINE = ReplicatedMergeTree`。
 
@@ -151,7 +154,7 @@ SETTINGS index_granularity = 8192;
 |---|---|---|
 | 每行落盘 | 120–150 字节 | 约 17 字节 |
 | 压缩比（未压缩 / 落盘） | 2.0–2.5 倍 | — |
-| 每行未压缩 | ≈ 300 字节（推断） | 约 36 字节 |
+| 每行未压缩 | ≈ 300 字节（推断） | 约 38 字节 |
 
 全表有两三千个 active part，大部分在历史分区上（生产事实）。单个日分区合并稳定后有几个 part、每个多大，还没查过（待核）。
 
@@ -188,7 +191,7 @@ SETTINGS index_granularity = 8192;
 | 来源 | 规模 | 形状 |
 |---|---|---|
 | producer 重试 | 一百多行 | 集中在一个 45 分钟的窗口里，每个键正好 2 份；约三分之二连 `create_time` 也相同，其余的晚几秒 |
-| sink 超时重投 | 两百多行 | 同一批原样再写一次，间隔 30–90 秒 |
+| sink 超时重投 | 两百多行 | 同一批原样再写一次，间隔 32–124 秒（一轮超时是 30–90 秒，超过 90 秒的经历了两轮） |
 | sink 重启重放 | 几万行 | 几分钟内的一段 offset 整段重放 |
 
 三种重复都是除 `create_time` 外整行相同。不管是哪一种，REPLACE PARTITION 都要把**一整天**重写一遍，代价跟分区大小走，跟重复了多少行无关（推断）。
@@ -206,7 +209,7 @@ SETTINGS index_granularity = 8192;
 | `min_insert_block_size_rows` / `_bytes` | 1048449 行 / 268402944 字节（约 256 MiB） | `INSERT … SELECT` 攒满任一个就落一个 part。窄表实测每 1111953 行一个；宽表每行在内存里约 400 字节，大概率先碰到字节上限，估计每六七十万行一个，三亿行大约四五百个（推断） |
 | `parts_to_delay_insert` / `parts_to_throw_insert` | 1000 / 3000（按单个分区算） | 上一行的四五百个 part 还没到阈值，但停了 merge 或者连续写几批就要留意 |
 | `max_bytes_to_merge_at_max_space_in_pool` | 150 GiB | 比一天的分区大，所以一天的数据理论上能合成很少几个 part；生产上实际几个要查（第八节） |
-| `old_parts_lifetime` | 480 秒 | 换分区后被替下的 part 要过这么久才删文件；快照表还用硬链接引用着的，要等快照表 `DROP` 掉才真正腾出空间 |
+| `old_parts_lifetime` | 480 秒 | merge 掉的旧 part 要过这么久才删文件，这段时间里盘上新旧两份都在。换分区换下来的 part 不等它，下一轮清理就删（[源码](https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Storages/MergeTree/MergeTreeData.cpp#L4655-L4662)；实验 20 换完分区，旧文件的链接数当场就是 1）；但快照表还用硬链接引用着它们，要等快照表 `DROP` 掉才真正腾出空间 |
 | `replicated_deduplication_window` | 1000 个块 | 第五节的去重窗口 |
 
 ## 八、还缺的生产数据，怎么只读地拿

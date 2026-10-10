@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# 验的是 docs/deployment-architecture.md 第二节第 1 条里那个标着待一手观察的代价：
-#   「ReplacingMergeTree + 版本列，查询侧带 FINAL 或用物化视图收敛。重投只是多一份
-#    待合并的行，不会变成对账差异。代价是 FINAL 的查询开销，对你们这张表值不值得没测过。」
+# 验的是 docs/deployment-architecture.md 第二节第 1 条「ReplacingMergeTree + 版本列，查询侧带 FINAL」：
+#   重投只是多一份待合并的行、不会变成对账差异，这一条成不成立；FINAL 的查询开销对这种表值不值得。
 #
 # 这是「别拿块级去重当正确性机制」那条建议的落地方式，所以它的代价必须量过。
 # 本地量得到的是机制和倍数，不是生产那张表的绝对耗时——两亿行的数没造，
@@ -67,7 +66,15 @@ nparts() { q1 "SELECT count() FROM system.parts WHERE database=currentDatabase()
 
 section "造数据：两张表各 $ROWS 行 + $REPOSTS 次重投（每次 $REPOST_ROWS 行，逐字节相同）"
 mk rmt; mk rmt_spread
-q1 "INSERT INTO rmt $(gen $ROWS)"
+q1 "INSERT INTO rmt SETTINGS log_comment = 'exp14/load' $(gen $ROWS)"
+# 单位成本：docs/deployment-architecture.md 里待建实验 15 的可行性估算用的就是这几个数
+q1 "SYSTEM FLUSH LOGS" >/dev/null
+LOAD_MS=$(q1 "SELECT query_duration_ms FROM system.query_log WHERE type = 'QueryFinish' AND log_comment = 'exp14/load'
+              ORDER BY event_time_microseconds DESC LIMIT 1" | tr -d '\n')
+IFS=$'\t' read -r DISK_SIZE DISK_PER_ROW RAW_PER_ROW <<<"$(q1 "SELECT formatReadableSize(sum(bytes_on_disk)),
+    round(sum(bytes_on_disk) / sum(rows), 1), round(sum(data_uncompressed_bytes) / sum(rows), 1)
+    FROM system.parts WHERE database = currentDatabase() AND table = 'rmt' AND active FORMAT TSV")"
+note "单位成本（只算这 $ROWS 行，ch1 一个副本）：INSERT … SELECT 用了 ${LOAD_MS} ms；落盘 ${DISK_SIZE}，每行 ${DISK_PER_ROW} 字节，未压缩每行 ${RAW_PER_ROW} 字节"
 q1 "INSERT INTO rmt_spread $(gen $ROWS)"
 for i in $(seq 1 $REPOSTS); do
   q1 "INSERT INTO rmt SETTINGS insert_deduplication_token = 'repost-$i' $(gen $REPOST_ROWS)"
@@ -88,19 +95,21 @@ note "不再是对账口径上的差异。块级去重窗口过没过期，和�
 note "注意上面那个物理行数是在「merge 已停」的前提下才稳定的：放开 merge 之后它会自己往下掉，"
 note "掉到哪一步、什么时候掉完，都不由你定——所以对账口径要么带 FINAL，要么认这个不确定性。"
 
-# runq 每条跑 3 遍；stat_of / val_of 从 query_log 取中位数（只认 T 之后、这条原文的 QueryFinish）
+# runq 每条跑 3 遍；stat_of / val_of 从 query_log 取中位数（只认 T 之后结束的、这条原文的 QueryFinish）。
+# 同一条 SQL 在后面几节还会再跑，所以 T 用微秒、每一节在下一节动表之前就把数取走，
+# 否则窗口会把后面那几次也算进来（早期版本第三节就这样把 29 个 part 的耗时混进了 14 个 part 的中位数）。
 runq() { local r; for r in 1 2 3; do q1 "$1" >/dev/null; done; }
-val_of() {  # val_of <起始时间> <SQL 原文> <列表达式>
+val_of() {  # val_of <起始时刻，微秒> <SQL 原文> <列表达式>
   q1 "SELECT $3 FROM system.query_log
-      WHERE type = 'QueryFinish' AND event_time >= toDateTime('$1') AND query = '$2'" | tr -d '\n'
+      WHERE type = 'QueryFinish' AND event_time_microseconds >= toDateTime64('$1', 6) AND query = '$2'" | tr -d '\n'
 }
 stat_of() {
   val_of "$1" "$2" "round(median(query_duration_ms)) || ' ms  ' || formatReadableQuantity(median(read_rows)) || ' 行  ' || formatReadableSize(median(memory_usage))"
 }
-now_s() { q1 "SELECT toString(now())" | tr -d '\n'; }
+now_us() { q1 "SELECT toString(now64(6))" | tr -d '\n'; }
 
 section "二、代价随查询形状变，不是一个固定倍数（rmt）"
-T0=$(now_s)
+T0=$(now_us)
 Q_CNT="SELECT count() FROM rmt"
 Q_CNT_F="SELECT count() FROM rmt FINAL"
 Q_RNG="SELECT max(amount) FROM rmt WHERE settle_time BETWEEN $DAY_MS AND $DAY_MS + 50000"
@@ -121,29 +130,31 @@ note "最贵的是 count()：不带 FINAL 走元数据快捷路径，带上就�
 note "只碰被扫到的那几个 granule，额外开销是同一个量级——「FINAL 贵不贵」要看查询形状，拿 count() 的倍数吓人是不对的。"
 
 section "三、代价跟着「落在重叠区间里的行」走，而不只是 part 数"
-T1=$(now_s)
+T1=$(now_us)
 runq "SELECT count() FROM rmt FINAL"; runq "SELECT count() FROM rmt_spread FINAL"
+q1 "SYSTEM FLUSH LOGS" >/dev/null
+MS_RMT=$(val_of "$T1" "SELECT count() FROM rmt FINAL" "toUInt64(median(query_duration_ms))")
+MS_SPREAD=$(val_of "$T1" "SELECT count() FROM rmt_spread FINAL" "toUInt64(median(query_duration_ms))")
 P_RMT=$(nparts rmt); P_SPREAD=$(nparts rmt_spread)
 note "再往 rmt 里堆 15 个集中在前 20000 个键上的小 part（同样每个给不同的 token）"
 for i in $(seq 1 15); do
   q1 "INSERT INTO rmt SETTINGS insert_deduplication_token = 'parts-$i' $(gen 20000)"
 done
 P_RMT_MANY=$(nparts rmt)
-T2=$(now_s); runq "SELECT count() FROM rmt FINAL"
+T2=$(now_us); runq "SELECT count() FROM rmt FINAL"
 q1 "SYSTEM FLUSH LOGS" >/dev/null
-MS_RMT=$(val_of "$T1" "SELECT count() FROM rmt FINAL" "toUInt64(median(query_duration_ms))")
-MS_SPREAD=$(val_of "$T1" "SELECT count() FROM rmt_spread FINAL" "toUInt64(median(query_duration_ms))")
 MS_RMT_MANY=$(val_of "$T2" "SELECT count() FROM rmt FINAL" "toUInt64(median(query_duration_ms))")
 printf '  %-34s %3s 个 part → count() FINAL 中位 %s ms\n' "rmt（重叠集中在前 10 万个键）" "$P_RMT" "$MS_RMT"
 printf '  %-34s %3s 个 part → count() FINAL 中位 %s ms\n' "rmt 再堆 15 个集中的小 part" "$P_RMT_MANY" "$MS_RMT_MANY"
 printf '  %-34s %3s 个 part → count() FINAL 中位 %s ms\n' "rmt_spread（重叠铺满全部键）" "$P_SPREAD" "$MS_SPREAD"
 expect "同样的 part 数，重叠铺满的比重叠集中的贵（1 = 是）" "$([ "$MS_SPREAD" -gt "$MS_RMT" ] && echo 1 || echo 0)" "1"
-note "看上面三行：重叠集中时，part 从 $P_RMT 个堆到 $P_RMT_MANY 个，耗时基本不跟着涨——绝大部分区间不和别的 part"
-note "相交，直接读；同样 $P_SPREAD 个 part，重叠铺满时每一段都要归并，耗时成倍上去。所以光数 part 不够，"
-note "要看新写进来的 part 和旧 part 在排序键上交叠得多广。按时间排序、只重投最近一批的表，重叠天然是集中的。"
+expect "part 多一倍、但重叠集中的，仍比 part 少、重叠铺满的便宜（1 = 是）" "$([ "$MS_SPREAD" -gt "$MS_RMT_MANY" ] && echo 1 || echo 0)" "1"
+note "重叠集中时 part 从 $P_RMT 个堆到 $P_RMT_MANY 个，耗时 ${MS_RMT} → ${MS_RMT_MANY} ms；同样 $P_SPREAD 个 part、重叠铺满时 ${MS_SPREAD} ms。"
+note "FINAL 只归并互相重叠的区间，不重叠的直接读：part 多了、重叠的行多了，它会变贵，但贵多少看重叠覆盖多少行，"
+note "光数 part 不够。按时间排序、只重投最近一批的表，重叠天然是集中的。"
 
 section "四、和「不用 FINAL、自己在查询里去重」比（两张表都还有重叠 part 的时候）"
-T3=$(now_s)
+T3=$(now_us)
 for t in rmt rmt_spread; do
   runq "SELECT count() FROM $t FINAL"
   runq "SELECT count() FROM (SELECT id FROM $t GROUP BY id, settle_time)"
@@ -169,14 +180,14 @@ done
 note "FINAL 能利用「每个 part 本来就按排序键有序」这件事，做的是流式归并；"
 note "自己写 GROUP BY / LIMIT 1 BY 等于把这个前提丢掉，要在内存里重新攒一遍哈希表或者重新排序。"
 note "所以「FINAL 太贵，别用」得分清跟谁比：跟「不去重」比它确实贵，跟「自己去重」比它便宜得多；"
-note "便宜多少取决于重叠有多广，上面两张表给的是两头。真正的替代品是物化视图，不是手写去重。"
+note "便宜多少取决于重叠有多广，上面两张表给的是两头。要省掉 FINAL 的读代价，用增量聚合的报表表，但它跟不上去重，要能重算（实验 24、25）。"
 
 section "五、OPTIMIZE FINAL 之后：重复行被物理去掉，FINAL 也没有东西要归并了"
 for t in rmt rmt_spread; do
   q1 "SYSTEM START MERGES ON CLUSTER default $t" >/dev/null
   q1 "OPTIMIZE TABLE $t FINAL" >/dev/null
 done
-T4=$(now_s); runq "SELECT count() FROM rmt FINAL"; runq "SELECT count() FROM rmt_spread FINAL"
+T4=$(now_us); runq "SELECT count() FROM rmt FINAL"; runq "SELECT count() FROM rmt_spread FINAL"
 q1 "SYSTEM FLUSH LOGS" >/dev/null
 for t in rmt rmt_spread; do
   expect "$t 合并之后的 part 数" "$(nparts $t)" "1"
@@ -192,5 +203,3 @@ note "分区数、并发、冷热层都不一样，倍数关系能带走，绝�
 
 for t in rmt rmt_spread; do q1 "DROP TABLE IF EXISTS $t ON CLUSTER default SYNC" >/dev/null; done
 exit $FAILED
-#   - ClickHouse Official Documentation (2025/2026)
-#     https://clickhouse.com/docs/en/

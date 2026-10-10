@@ -66,5 +66,3 @@ note "分区 ID 那条是硬的，PARTITION ID 后面必须是字符串字面量
 
 q1 "DROP TABLE IF EXISTS part_syntax ON CLUSTER default SYNC" >/dev/null
 exit $FAILED
-#   - ClickHouse Official Documentation (2025/2026)
-#     https://clickhouse.com/docs/en/

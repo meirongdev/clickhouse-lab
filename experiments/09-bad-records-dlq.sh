@@ -180,5 +180,3 @@ note "这一批只剩源 topic 里那一份，过了 Kafka 的保留期就没了
 
 cleanup
 exit $FAILED
-#   - ClickHouse Official Documentation (2025/2026)
-#     https://clickhouse.com/docs/en/

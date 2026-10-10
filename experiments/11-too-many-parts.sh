@@ -147,5 +147,3 @@ awk 'BEGIN { for (i = 1; i <= 3000; i++) printf "{\"id\":%d}\n", i }' |
 expect "客户端发 3000 行一小批：1 个 part（Kafka Connect 每批每个分区就是这种）" "$(part_rows)" "3000"
 q1 "DROP TABLE IF EXISTS blocksplit ON CLUSTER default SYNC" >/dev/null
 exit $FAILED
-#   - ClickHouse Official Documentation (2025/2026)
-#     https://clickhouse.com/docs/en/

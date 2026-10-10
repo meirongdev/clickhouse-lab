@@ -221,5 +221,3 @@ fi
 
 q1 "DROP TABLE IF EXISTS recov ON CLUSTER default SYNC" >/dev/null 2>&1
 exit $FAILED
-#   - ClickHouse Official Documentation (2025/2026)
-#     https://clickhouse.com/docs/en/

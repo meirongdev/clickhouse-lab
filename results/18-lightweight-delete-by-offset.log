@@ -1,4 +1,66 @@
-# 跑于 2026-10-10 00:37:29 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 6be142c+改动
+# 跑于 2026-10-10 19:28:29 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 94c06b8+改动 | SLOW=1
 
 === 准备：60 个别的日分区各 1 个 part；当天窗口 100000 行一个 part，外加 3 份重复 ===
-experiments/18-lightweight-delete-by-offset.sh: line 60: D�: unbound variable
+  [符合] 第 1 轮重复真的写进来了（当天行数 = 100000 + 3）：100003
+  · active part 数：62
+
+=== 一、方法一原文 ===
+  返回：Code: 36. DB::Exception: ALTER UPDATE/ALTER DELETE statement with subquery may be nondeterministic, see allow_nondeterministic_mut
+  [符合] 带子查询的 mutation 在 Replicated 表上默认被拒，原样执行什么都不会删
+
+=== 二、放开 allow_nondeterministic_mutations，不限分区 ===
+  · ch2 读了 6876685 行 = 窗口的 34.4 遍；出了 62 个新版本 part，其中别的分区 60 个
+  · 其中 61 个没命中、只是 hardlink 克隆（这些 part 写盘 0 字节）；真正写了 _row_exists 的 1 个
+  [符合] 三个副本当天行数：100000,100000,100000
+  [符合] 留下的是 create_time 最早的那份（晚 5 秒的副本还剩）：0
+  [符合] 别的分区的 60 个 part 全都出了一个新版本：60
+  [符合] 只有新写进来那 3 份重复所在的 1 个 part 真写了 _row_exists：1
+  [符合] 克隆写盘字节数：0
+  · 所以全表 part 数的代价不在写盘，在读：判断每个 part 命没命中，都要把子查询再跑一遍
+  [符合] 子查询读了不止一遍（窗口遍数 > 10）：1
+  · 再补 60 个日分区（part 数翻倍），同一条 DELETE 再跑一次
+  [符合] 第 2 轮重复真的写进来了（当天行数 = 100000 + 3）：100003
+  · active part 数：123
+  · ch2 读了 13584241 行 = 窗口的 67.9 遍；出了 123 个新版本 part，其中别的分区 120 个
+  · 其中 122 个没命中、只是 hardlink 克隆（这些 part 写盘 0 字节）；真正写了 _row_exists 的 1 个
+  · part 数 62 → 122，读窗口的遍数 34.4 → 67.9
+  [符合] 遍数跟着全表 part 数近似翻倍（比值在 1.6–2.4 之间）：1
+  · 外层再加 settle_ms 的范围条件也没用：mutation 不按 WHERE 裁 part，照样每个 part 过一遍
+  [符合] 第 3 轮重复真的写进来了（当天行数 = 100000 + 3）：100003
+  · ch2 读了 13526461 行 = 窗口的 67.6 遍；出了 124 个新版本 part，其中别的分区 120 个
+  · 其中 123 个没命中、只是 hardlink 克隆（这些 part 写盘 0 字节）；真正写了 _row_exists 的 1 个
+  [符合] 加了范围条件之后别的分区被改的 part 数（> 0 就是没裁掉）：1
+
+=== 三、加上 IN PARTITION ID '20260324' ===
+  · 前几轮在当天分区留下了几个带删除标记的 part。先把当天合成一个 part，和第二节的起点（窗口 1 个 part + 重复 1 个 part）对齐
+  [符合] 当天分区合并之后的 part 数：1
+  [符合] 第 4 轮重复真的写进来了（当天行数 = 100000 + 3）：100003
+  · ch2 读了 324805 行 = 窗口的 1.6 遍；出了 2 个新版本 part，其中别的分区 0 个
+  · 其中 1 个没命中、只是 hardlink 克隆（这些 part 写盘 0 字节）；真正写了 _row_exists 的 1 个
+  [符合] 子查询的遍数不超过当天分区的 part 数 2（不再跟着全表 part 数走，1 = 是）：1
+  · IN PARTITION 把「每个 part 判断一次命没命中、每次都跑一遍子查询」限制在当天分区里。当天 part 多了照样放大，
+  · 所以执行前先看一眼当天的 active part 数，必要时先把当天合并掉
+  [符合] 别的分区被改的 part 数：0
+  [符合] 结果仍然对：当天行数：100000
+
+=== 四、轻量删除之后 system.parts 的 rows 还算着被标删的行 ===
+  [符合] 第 5 轮重复真的写进来了（当天行数 = 100000 + 3）：100003
+  · count() = 100000，system.parts sum(rows) = 100006
+  [符合] system.parts 比 count() 多出来的行（至少是这一次的 3）：1
+  [符合] 带轻量删除标记的 part 数 > 0：1
+  · 所以用方法一时不能拿 system.parts 的 sum(rows) 当核对，要用 count()；方法二换进来的 part 没有标记，两者一致
+
+=== 五、不带子查询、只写字面量键的轻量删除，不加 IN PARTITION 照样改全表每个 part ===
+  · 常见的另一种写法：先把要删的键和那份副本的 create_time 查出来，再贴成字面量去删（确定性的，不需要 allow_nondeterministic_mutations）
+  · 当时 active part 125 个；这条 DELETE 出了 125 个新版本 part，其中别的分区 120 个
+  [符合] 别的分区的 part 全都出了一个新版本（= 别的分区当时的 part 数 120）：120
+  [符合] 别的分区那些都是 hardlink 克隆（克隆数 ≥ 别的分区 part 数，1 = 是）：1
+  [符合] 克隆写盘字节数：0
+  · 字面量 DELETE 没有子查询，判断命没命中只靠主键和分区裁剪，所以读不放大；代价是每个 part 都要换一个
+  · 新版本（目录、元数据、Keeper 里的 mutation 记录），part 多的表上这本身就是负担。加 IN PARTITION 才只碰当天
+  [符合] 删对了：晚 47 秒那份没了，早的那份还在：['2026-03-24 10:00:00.000']
+
+=== 六、两份 create_time 相同时，「按 create_time 删较晚那份」会两份一起删掉 ===
+  [符合] 这个键还剩几行（两份都被删了）：0
+  · 同一秒写进来的两份（DateTime 精度到秒时很常见）用 create_time 分不开，只能靠 _part/_part_offset 或整分区重写
+# 退出码 0

@@ -1,4 +1,4 @@
-# 跑于 2026-10-10 00:37:35 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 6be142c+改动
+# 跑于 2026-10-10 19:28:53 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 94c06b8+改动 | SLOW=1
 
 === 一、ATTACH PARTITION … FROM 做快照 ===
   [符合] 快照表和原表的 v.bin 是同一个 inode（ch1 上看，1 = 是）：1
@@ -30,3 +30,4 @@ ch2	hl_src	NewPart	2
 ch3	hl_bak	NewPart	1
 ch3	hl_src	NewPart	2
   [符合] 三个副本都没有从别处拉数据（DownloadPart 合计）：0
+# 退出码 0

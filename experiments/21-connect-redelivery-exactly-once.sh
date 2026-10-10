@@ -221,5 +221,3 @@ note "那一种只能靠块级去重窗口（尽力而为）或者下游幂等�
 
 cleanup
 exit $FAILED
-#   - ClickHouse Official Documentation (2025/2026)
-#     https://clickhouse.com/docs/en/

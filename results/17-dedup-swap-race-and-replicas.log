@@ -1,4 +1,4 @@
-# 跑于 2026-10-10 00:37:25 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 6be142c+改动
+# 跑于 2026-10-10 19:28:25 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 94c06b8+改动 | SLOW=1
 
 === A、临时表建好之后、换分区之前，同一天又写进来一批 ===
   [符合] 方案校验 1：临时表窗口内重复数：0
@@ -45,3 +45,4 @@ RemovePart	2	100018
   [符合] REPLACE_RANGE 落地的 part 在 part_log 里记成 NewPart，行数合计：100000
   · 所以 A 段那条事后检查必须卡在换分区那一刻之前（event_time_microseconds < 换分区时间），否则会把换进来的 part 也算成新写入
   · 该用的核对：clusterAllReplicas 数每个副本的行数、查全副本的 replication_queue，都清了再 DROP 临时表
+# 退出码 0

@@ -16,6 +16,7 @@
 | 去重窗口拦下的重投 | `system.part_log` 里 `event_type = 'NewPart' AND error = 389` 的条数 | 相对基线突增 | 有重投在发生、而且这一次被窗口拦住了。拦不住的那一次不会留在这里，要回到「多了」那条排查顺序 |
 | Kafka Connect 接入 | connector 的 task 状态、消费组 lag、DLQ topic 的消息数 | task 不是 `RUNNING`；lag 持续增长；DLQ 有新消息 | `FAILED` 时先读 task 的报错，坏记录不处理会反复失败（实验 09）；DLQ 有量时按整批补数，同批的好记录也在里面。开着 `exactlyOnce` 时另看两种报错（实验 23）：`State MISMATCH` 是崩溃后重读的几批已经写过，开 `tolerateStateMismatch` 跳过；`State CONTAINS` 是插入结果不明、批次边界又变了，先按 offset 核对 ClickHouse 里有没有，再删状态表那一行重启。DLQ 里也会混进这两种，按异常头分开补 |
 | 磁盘与冷热层 | `system.disks`，按表和分区聚合 `system.parts.bytes_on_disk` | 冷层占比、增速 | 提前算重建一个分区要从冷层拉多少回来，别在事故里第一次算 |
+| 报表和明细对不上 | [report-pipeline.md](report-pipeline.md) 第三节的对账查询，按天跑最近两周 | 任一天有对不上的桶 | 按那一节的步骤重算那一天（带闸、带 `max_threads = 2`）。偏多少、为什么偏，对照第二节那张表（实验 24、25） |
 | 服务端错误计数 | `system.errors` 非零项 | 任一新出现的名目 | 顺着 name 去 `system.query_log` 找具体查询 |
 | 默认值漂移 | 升级后重跑实验 01（15 项默认值逐项断言）、07、11（升级 = 动 compose 里钉的 tag + digest） | 与 `mechanism-map.md` 对不上 | 更新那张表，顺带检查文章里的版本断言 |
 

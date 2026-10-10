@@ -9,7 +9,7 @@ NODES=("$CH1" "$CH2" "$CH3")
 NODE_NAMES=(ch1 ch2 ch3)
 # 下面这些实验绕过 HTTP 直接摸容器，只能在 docker 宿主机上跑：
 #   08、13、20 进容器看文件（hardlink 链接数、inode、shadow/ 目录），12 停 / 冻 Keeper 容器，
-#   09、21 操作 Kafka 栈的容器。容器名必须和 CH1/CH2/CH3 指的是同一组节点，否则量的是别的机器。
+#   09、21、23 操作 Kafka 栈的容器。容器名必须和 CH1/CH2/CH3 指的是同一组节点，否则量的是别的机器。
 CH1_CONTAINER=${CH1_CONTAINER:-ch1}
 CH2_CONTAINER=${CH2_CONTAINER:-ch2}
 CH3_CONTAINER=${CH3_CONTAINER:-ch3}
@@ -86,12 +86,29 @@ wait_mutation() {
   printf '  等了 %ss 仍有 %s 个 mutation 没跑完\n' "$timeout" "$n"; return 1
 }
 
-# provenance  每份 log 的第一行：跑的时间、服务端版本、镜像、lab 的 git rev、有没有跑慢速段。
-# results/ 是要提交进仓库当证据的，没有这一行就分不清某份 log 是哪天、哪个镜像、哪一版脚本跑出来的。
+# machine  跑这份 log 的机器：宿主机的 CPU 型号、核数、内存，加上 Docker 虚拟机分到的 CPU 和内存。
+# 耗时、用了几个核这类数字（实验 11、14、26 等）跟着机器变，两份 log 的这类数字能不能比，先看这一项。
+machine() {
+  local model cores mem dk
+  if [ "$(uname)" = Darwin ]; then
+    model=$(sysctl -n machdep.cpu.brand_string 2>/dev/null)
+    cores=$(sysctl -n hw.ncpu 2>/dev/null)
+    mem=$(sysctl -n hw.memsize 2>/dev/null | awk '{ printf "%.0f GiB", $1 / 1073741824 }')
+  else
+    model=$(awk -F': ' '/^model name/ { print $2; exit }' /proc/cpuinfo 2>/dev/null)
+    cores=$(nproc 2>/dev/null)
+    mem=$(awk '/^MemTotal/ { printf "%.0f GiB", $2 / 1048576 }' /proc/meminfo 2>/dev/null)
+  fi
+  dk=$(docker info --format '{{.NCPU}} {{.MemTotal}}' 2>/dev/null | awk 'NF == 2 { printf "%s CPU / %.1f GiB", $1, $2 / 1073741824 }')
+  printf '%s（%s 核 / %s），Docker %s' "${model:-未知}" "${cores:-?}" "${mem:-?}" "${dk:-未知}"
+}
+
+# provenance  每份 log 的第一行：跑的时间、服务端版本、镜像、lab 的 git rev、机器、有没有跑慢速段。
+# results/ 是要提交进仓库当证据的，没有这一行就分不清某份 log 是哪天、哪个镜像、哪一版脚本、哪台机器跑出来的。
 # 镜像那一项读的是本机 ch1 容器实际用的引用（compose 里钉了 digest），不是写死在这里的 tag，
 # 免得钉的和记的两边分头漂。取不到的字段填「未知」，不让它中断实验。
 # rev 后面带「+改动」表示跑的时候脚本或配置有未提交的修改：这时 rev 指的那一版不是实际跑的那一版。
-# SLOW=1 表示带上了默认跳过的慢速段（实验 02、13 各等几分钟）；没有这一项的 log 里就没有那几段的证据。
+# SLOW=1 表示带上了默认跳过的慢速段（实验 02、12、13 各多等几分钟）；没有这一项的 log 里就没有那几段的证据。
 provenance() {
   local ver img rev root dirty slow=""
   root=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -102,8 +119,8 @@ provenance() {
             docker-compose.yml docker-compose-kafka.yml cluster.sh run-all.sh 2>/dev/null)
   [ -n "$dirty" ] && rev="${rev}+改动"
   [ "${SLOW:-0}" = "1" ] && slow=" | SLOW=1"
-  printf '# 跑于 %s | 服务端 %s | 镜像 %s | lab %s%s\n' \
-    "$(date '+%F %T %z')" "${ver:-未知}" "${img:-未知}" "${rev:-未提交}" "$slow"
+  printf '# 跑于 %s | 服务端 %s | 镜像 %s | lab %s | 机器 %s%s\n' \
+    "$(date '+%F %T %z')" "${ver:-未知}" "${img:-未知}" "${rev:-未提交}" "$(machine)" "$slow"
 }
 
 # text_log_since <时间> <logger 名里的片段> <message LIKE 模式>  读服务端自己的 trace 日志。

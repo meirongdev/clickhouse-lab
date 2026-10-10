@@ -1,4 +1,4 @@
-# 跑于 2026-10-10 00:35:22 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 6be142c+改动
+# 跑于 2026-10-10 19:13:20 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 94c06b8+改动 | SLOW=1
 
 === 造两个分区：p=1 做成 Wide part，p=2 故意留成 Compact ===
 partition_id	part_type	rows	size
@@ -13,11 +13,11 @@ partition_id	column	col_size
 1	placed_at	232.00 B
 2	pad	0.00 B
 2	placed_at	0.00 B
-  · 改之前 p=1 的 part：/var/lib/clickhouse/store/e0a/e0a933f9-4057-460d-a730-b1cc91ca1002/1_0_0_0/
+  · 改之前 p=1 的 part：/var/lib/clickhouse/store/8bf/8bfda04f-d023-46c3-a356-5a814ec9df8b/1_0_0_0/
 
 === Wide part 上跑列级 mutation，带 IN PARTITION ===
   mutation 在 2s 内跑完
-  · 改之后 p=1 的 part：/var/lib/clickhouse/store/e0a/e0a933f9-4057-460d-a730-b1cc91ca1002/1_0_0_0_1/
+  · 改之后 p=1 的 part：/var/lib/clickhouse/store/8bf/8bfda04f-d023-46c3-a356-5a814ec9df8b/1_0_0_0_1/
   [符合] 生成了新 part：yes
 
 === 新 part 里各列文件的 hardlink 链接数 ===
@@ -34,4 +34,27 @@ partition_id	column	col_size
   [符合] p=1 里 placed_at 仍是 0 的行数：0
 
 === Compact part 上跑同一种列级 mutation：所有列在一个 data.bin 里，只能整个重写 ===
-experiments/08-mutation-column-rewrite.sh: line 90: OLD2�: unbound variable
+  · 改之前 p=2 的 part：/var/lib/clickhouse/store/8bf/8bfda04f-d023-46c3-a356-5a814ec9df8b/2_0_0_0/，里面的文件：checksums.txt columns.txt count.txt data.bin data.cmrk3 default_compression_codec.txt metadata_version.txt minmax_p.idx partition.dat primary.cidx serialization.json 
+  mutation 在 2s 内跑完
+  · 改之后 p=2 的 part：/var/lib/clickhouse/store/8bf/8bfda04f-d023-46c3-a356-5a814ec9df8b/2_0_0_0_1/
+  [符合] 新 part 仍是 Compact：Compact
+  [符合] Compact 的 data.bin（1 = 整个新写，没有可以 hardlink 的单列文件）：1
+  [符合] p=2 里 placed_at 仍是 0 的行数：0
+  · 所以「mutation 只重写被改的列」只对 Wide part 成立：Compact part 改一列，所有列的数据都重写一遍。
+  · Compact 只出现在小 part 上（默认 min_bytes_for_wide_part = 10 MiB 以下），重写的绝对量不大，但比例是 100%。
+
+=== primary / partition key 上的列不支持更新 ===
+  ALTER TABLE mut UPDATE settled_at = settled_at + 1 …
+    Code: 420. DB::Exception: Cannot UPDATE key column `settled_at`. (CANNOT_UPDATE_COLUMN) (version 25.3.14.14 (official build))
+  ALTER TABLE mut UPDATE p = 3 …
+    Code: 420. DB::Exception: Cannot UPDATE key column `p`. (CANNOT_UPDATE_COLUMN) (version 25.3.14.14 (official build))
+
+=== 验收要问遍三台（文章里 clusterAllReplicas 那条） ===
+replica	mutation_id	is_done	parts_to_do
+ch1	0000000000	1	0
+ch1	0000000001	1	0
+ch2	0000000000	1	0
+ch2	0000000001	1	0
+ch3	0000000000	1	0
+ch3	0000000001	1	0
+# 退出码 0

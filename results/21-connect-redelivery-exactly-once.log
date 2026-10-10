@@ -1,4 +1,4 @@
-# 跑于 2026-10-10 00:37:38 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 6be142c+改动
+# 跑于 2026-10-10 19:28:57 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 94c06b8+改动 | SLOW=1
 # Kafka Connect 7.7.0-ccs | clickhouse-kafka-connect v1.3.9
 
 === 一、超时重投：服务端已经提交、客户端超时、框架原样重投 ===
@@ -11,22 +11,61 @@
   · 第 35 秒恢复拉取：quorum 凑齐，三条 INSERT 在服务端正常结束；客户端在第 30 秒就已经超时了
   · query_log：这一批在每张表上的 INSERT（含 QueryStart）
 tbl	type	started	ms	written_rows	token
-t21_a	QueryStart	16:37:57	0	0	t21_a-0-1-5
-t21_a	QueryStart	16:38:51	0	0	t21_a-0-1-5
-t21_a	QueryFinish	16:38:51	14	5	t21_a-0-1-5
-t21_b	QueryStart	16:37:57	0	0	t21_b-0-1-5
-t21_b	QueryStart	16:38:51	0	0	t21_b-0-1-5
-t21_b	QueryFinish	16:38:51	34	5	t21_b-0-1-5
-t21_c	QueryStart	16:37:58	0	0	t21_c-0-1-5
-t21_c	QueryStart	16:38:51	0	0	t21_c-0-1-5
-t21_c	QueryFinish	16:38:51	21	5	t21_c-0-1-5
+t21_a	QueryStart	11:29:15	0	0	t21_a-0-1-5
+t21_a	QueryStart	11:30:10	0	0	t21_a-0-1-5
+t21_a	QueryFinish	11:30:10	10	5	t21_a-0-1-5
+t21_b	QueryStart	11:29:16	0	0	t21_b-0-1-5
+t21_b	QueryStart	11:30:10	0	0	t21_b-0-1-5
+t21_b	QueryFinish	11:30:10	35	5	t21_b-0-1-5
+t21_c	QueryStart	11:29:17	0	0	t21_c-0-1-5
+t21_c	QueryStart	11:30:10	0	0	t21_c-0-1-5
+t21_c	QueryFinish	11:30:10	26	5	t21_c-0-1-5
   · 第一条只有 QueryStart、没有结束记录：客户端断开之后，它在服务端等到 quorum 凑齐才完成，query_log 却没记下来。
   · 事后排查只看 query_log，会以为它没成功；它成没成功要看 part_log：
 table	at	part_name	rows	error	error_name
-t21_a	16:38:31	all_1_1_0	5	0	OK
-t21_a	16:38:51	all_3_3_0	5	389	INSERT_WAS_DEDUPLICATED
-t21_b	16:38:31	all_1_1_0	5	0	OK
-t21_b	16:38:51	all_2_2_0	5	0	OK
-t21_c	16:38:31	all_1_1_0	5	0	OK
-t21_c	16:38:51	all_2_2_0	5	0	OK
-experiments/21-connect-redelivery-exactly-once.sh: line 157: x�: unbound variable
+t21_a	11:29:50	all_1_1_0	5	0	OK
+t21_a	11:30:10	all_3_3_0	5	389	INSERT_WAS_DEDUPLICATED
+t21_b	11:29:50	all_1_1_0	5	0	OK
+t21_b	11:30:10	all_2_2_0	5	0	OK
+t21_c	11:29:50	all_1_1_0	5	0	OK
+t21_c	11:30:10	all_2_2_0	5	0	OK
+  [符合] t21_a：两次 INSERT 用的是同一个 insert_deduplication_token：1
+  [符合] t21_a：重投在第一次之后 30–90 秒开始（实际 55s，1 = 是）：1
+  [符合] t21_b：两次 INSERT 用的是同一个 insert_deduplication_token：1
+  [符合] t21_b：重投在第一次之后 30–90 秒开始（实际 54s，1 = 是）：1
+  [符合] t21_c：两次 INSERT 用的是同一个 insert_deduplication_token：1
+  [符合] t21_c：重投在第一次之后 30–90 秒开始（实际 53s，1 = 是）：1
+  [符合] a：第一条提交了（NewPart，error=0）、重投那条被去重（NewPart，error=389）：1-1
+  [符合] b：两条都提交了（NewPart，error=0）：2
+  [符合] c：两条都提交了（NewPart，error=0）：2
+  [符合] a（exactlyOnce=false，窗口还在）：行数 = 1 + 5，第二次被块级去重拦下：6
+  [符合] b（exactlyOnce=false，窗口认不出）：行数 = 1 + 5 + 5，第二份落地：11
+  [符合] b 里重复的 offset 数：5
+  [符合] c（exactlyOnce=true，窗口认不出）：行数 = 1 + 5 + 5，exactlyOnce 没拦住：11
+  [符合] c 里重复的 offset 数：5
+  · c 的状态表里这一批最后记成：AFTER_PROCESSING [1, 5]
+  · 也就是说，对生产那种「同一批原样重投」，exactlyOnce 和不开没有区别，能不能拦下全看块级去重窗口。
+  · Connect 这边一轮超时只有 30 秒加上等到下一个提交点（≤ 60 秒）的工夫，窗口能不能撑过这段，看实验 02。
+
+=== 二、worker 崩溃之后的重投：区间变了，token 也变了 ===
+  · d：exactlyOnce=false；e：exactlyOnce=true。两张表的去重窗口都是默认的 1000（窗口一直在）
+  · offset 1–5 写进去之后立刻 kill -9 掉 Connect worker：写进去了，offset 来不及提交
+  · 崩溃时已提交的 offset：d=0，e=0（下次从这里重读）
+  · Connect 停着的时候每个 topic 又来了 5 条（offset 6–10）
+  · Connect 重启完：约 12s
+  · 两张表收到的全部批次（token = topic-分区-起始 offset-结束 offset），最后一行是重启之后那一批：
+tbl	written_rows	token
+t21_d	1	t21_d-0-0-0
+t21_d	5	t21_d-0-1-5
+t21_d	11	t21_d-0-0-10
+t21_e	1	t21_e-0-0-0
+t21_e	5	t21_e-0-1-5
+t21_e	5	t21_e-0-6-10
+  [符合] 两张表 offset 0–10 都到齐了（不同的 offset 数）：11-11
+  [符合] d（exactlyOnce=false）：offset 1–5 又写了一遍（重复的 offset 数 ≥ 5，1 = 是）：1
+  [符合] e（exactlyOnce=true）：没有重复：0
+  · d 的去重窗口一直在，照样没拦住：重启后那一批是「旧的几条 + 新的几条」，token 和第一次那批不同，
+  · 块级去重根本认不出来。e 靠状态表里记的「已经写到哪个 offset」把重叠的那段切掉了。
+  · 结论：exactlyOnce 防的是重启 / rebalance 之后批次边界变了的重投；生产那次「同一批原样重投」它不防，
+  · 那一种只能靠块级去重窗口（尽力而为）或者下游幂等（ReplacingMergeTree，实验 14）。
+# 退出码 0

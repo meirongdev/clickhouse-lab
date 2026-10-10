@@ -250,5 +250,3 @@ note "R3 的读写量跟着分区行数线性涨，R5 只挂硬链接（实验 2
 
 drop_all
 exit $FAILED
-#   - ClickHouse Official Documentation (2025/2026)
-#     https://clickhouse.com/docs/en/

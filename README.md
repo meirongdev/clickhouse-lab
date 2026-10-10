@@ -1,44 +1,36 @@
-# ClickHouse Lab: 从原理到百亿级实战的渐进指南
+# clickhouse-lab
 
-本仓库不仅是一个包含 25 个极限压测脚本的实验室，更是一部**层层递进的 ClickHouse 架构实战白皮书**。
-我们以“如何扛住日均 3 亿笔交易数据的摄入与实时报表”为核心命题，在全托管云环境（Aiven ClickHouse + Confluent Kafka）中，为您铺开一条从“踩坑”到“精通”的最佳实践之路。
+给博客上那四篇 ClickHouse 文章做的可复现实验台。
 
-## 🗺️ 渐进式阅读指南 (Progressive Reading Path)
+四篇的结论都来自一套 Aiven 托管的生产集群，而现场基本取不到了：`system.part_log` 只留 4 天、`query_log` 4 天、Kafka Connect 日志 7 天。文章里因此有若干处只能标「没有实测过」「这一句是推断」。这个 lab 用 docker compose 起一套同版本的 1 shard × 3 replicas，再加一套可选的 Kafka + Kafka Connect，把其中能在本地重放的断言逐条跑一遍，把推断换成观测。
 
-为了让您轻松理解整套系统的设计理念，请按以下四大阶段顺畅阅读：
+对应的文章：
 
-### 阶段一：业务挑战与痛点起因 (The Challenge)
-*为什么常规的大数据架构会在 ClickHouse 面前折戟沉沙？*
-* [**生产环境原始业务形态**](docs/production-shape.md)：了解我们的初始规模（数亿交易、严格去重需求）以及遭遇的性能瓶颈。
-* [**海量数据规模规划**](docs/plan-scale-dedup.md)：面对极高并发时的资源预估与初始踩坑记录。
+1. 用只读权限评审 ClickHouse 补数方案
+2. ClickHouse 里的重复行来自 Kafka Connect 超时重投
+3. ClickHouse 的块级去重窗口
+4. 清理 ClickHouse 重复行的 REPLACE PARTITION runbook
 
-### 阶段二：底层机制与原理解构 (Deconstructing Mechanics)
-*ClickHouse 到底是怎么运作的？不要靠猜，看实测数据。*
-* [**核心表引擎原理与选型白皮书**](docs/engine-selection-guide.md)：详述 `MergeTree` 家族四大核心引擎的适用场景，揭秘 3 节点高可用架构下 `Replicated` 复制层的工作原理。
-* [**MergeTree 机制映射与默认参数全览**](docs/mechanism-map.md)：带你透视 ClickHouse 源码，理解去重窗口、Merge 裁剪周期等生死攸关的参数。
-* [**自动化极限实验库 (Experiments)**](experiments/)：包含 25 个自动化脚本，亲眼见证并发换分区、宕机断网、脏数据注入时引擎的真实反应。
+后来又把落到这套生产上的几个方案放进来验：去重方案、报表链路、明细表换引擎（实验 24–27）。按要做的事找文档：
 
-### 阶段三：破局之道与最佳实践 (The Golden Architecture) 🌟 [核心]
-*结合原理，我们推导出了支撑百亿规模的极简终极架构。*
-* [**ClickHouse 百亿级核心最佳实践 (精简版)**](docs/best-practices-billion-rows.md)：**强烈推荐阅读！** 总结了 5 大核心法则，包含 `ReplacingMergeTree + FINAL` 强一致去重、显式物化视图预聚合、S3 冷热分层，以及对 Kafka Sink 的极限攒批限流调优。
+| 要做的事 | 看哪份 | 依据的实验 |
+|---|---|---|
+| 排查行数多了、少了、不对 | [docs/data-problems.md](docs/data-problems.md)、[docs/mechanism-map.md](docs/mechanism-map.md) | 02、03、09、10、12、21、23 |
+| 定去重方案：为什么不靠 `exactlyOnce`、六项措施 | [docs/dedup-solution.md](docs/dedup-solution.md) | 02、14、21、23、24、27 |
+| 清理已经写进去的重复行 | [docs/review-dedup-replace-plan.md](docs/review-dedup-replace-plan.md) | 16–20 |
+| 报表：建表、对账、重算、按时区上卷 | [docs/report-pipeline.md](docs/report-pipeline.md) | 24、25、26 |
+| 明细表在线换成 `ReplicatedReplacingMergeTree` | [docs/engine-migration-runbook.md](docs/engine-migration-runbook.md) | 27 |
+| 巡检、误删之后怎么救 | [docs/daily-checklist.md](docs/daily-checklist.md) | 07、11、13 |
+| 每个实验跑没跑过、过没过 | [docs/Test-Report.md](docs/Test-Report.md) | 全部 |
 
-### 阶段四：实战跑测与运维兜底 (Operations & Runbooks)
-*落地到生产，如何证明它可行？出了事怎么救？*
-* [**全量本地压测验证报告 (Test Report)**](docs/Test-Report.md)：在当前环境实跑 27 个实验的完整功能验证报告，用数据证明架构的稳健。
-* [**去重与副本修复方案 (Runbook)**](docs/dedup-solution.md)：当遇到无可挽回的数据污染时，如何利用底层硬链接特性（`ATTACH/REPLACE PARTITION`）做到秒级无损回滚。
-* [**引擎平滑升级与亿级数据割接指南**](docs/engine-migration-runbook.md)：手把手教您如何在每天 3 亿笔高压流量下，利用原子重命名和透明视图，零停机、无痛完成底层表引擎大换血。
-* [**生产级高可用：异常处理、隔离与容量规划**](docs/ops-resilience-scaling.md)：详解四大异常的处理手段，验证 `max_threads` 对大查询的隔离保护，并给出未来迈入 10 亿量级的硬件扩容基线。
-* [**全链路核心监控与告警基线指标**](docs/observability-metrics.md)：DevOps 团队必看的 Datadog/Prometheus P1 级告警配置清单，防范数据积压与集群雪崩。
-
----
-
-## 🚀 本地实验室跑起来 (How to run locally)
+## 跑起来
 
 ```bash
 ./cluster.sh up        # 只起 ClickHouse（1 keeper + 3 副本）。除 09、21、23 之外的实验只要这个
 ./cluster.sh up all    # 再加 Kafka 栈（ZooKeeper + Kafka + Kafka Connect），实验 09、21、23 要用
-./run-all.sh           # 起全套，按顺序跑完全部实验，输出同时存进 results/
-SLOW=1 ./run-all.sh    # 连默认跳过的慢速段一起跑（实验 02、12、13 多等约 15 分钟）
+./run-all.sh           # 起全套，按顺序跑完全部实验，输出存进 results/，再生成 docs/Test-Report.md 的汇总表
+SLOW=1 ./run-all.sh    # 连默认跳过的慢速段一起跑（实验 02、12、13 多等约 15 分钟）；整套约 45 分钟
+./report.sh            # 只从 results/ 重新生成汇总表，不碰集群
 ./cluster.sh down      # 收工，两套一起删，连数据卷
 ```
 
@@ -51,18 +43,21 @@ bash experiments/02-dedup-window-overflow.sh
 
 每个实验脚本自带断言，`[符合]` / `[不符]` 直接打在输出里，退出码非 0 表示有断言没过。注意 `[符合]` 说的是「观测和脚本写死的期望一致」，不是「文章那条断言成立」——脚本写的是修正后的行为，两者的区别见[实验设计](#实验设计)。脚本各自清理自己建的表、topic 和 connector，可以反复跑。
 
-需要 Docker（实测环境 10 CPU / 16 GiB，OrbStack）。ClickHouse 那套镜像约 1 GB，`up` 十几秒；Kafka 栈三个镜像合计约 3.5 GB（有共用层），Connect 起来要二三十秒，第一次 `up all` 还会从 GitHub release 下载约 12 MB 的 connector 插件并校验 sha256（插件不进 git）。
+需要 Docker。`results/` 这一批跑在 Apple M2 Pro（12 核 / 32 GiB）上的 OrbStack 里，虚拟机 12 CPU / 16 GiB；耗时、实验 26 的「不限线程用几个核」都随机器变，换一台机器（比如 10 核的 M5）重跑，这类数字会不一样。ClickHouse 那套镜像约 1 GB，`up` 十几秒；Kafka 栈三个镜像合计约 3.5 GB（有共用层），Connect 起来要二三十秒，第一次 `up all` 还会从 GitHub release 下载约 12 MB 的 connector 插件并校验 sha256（插件不进 git）。
 
 `results/` 里每份 log 的第一行是这次跑的出处，单跑一个实验也有：
 
 ```
-# 跑于 2026-10-05 02:40:11 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9… | lab ca4e119+改动 | SLOW=1
+# 跑于 2026-10-10 23:20:14 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9… | lab 94c06b8+改动 | 机器 Apple M2 Pro（12 核 / 32 GiB），Docker 12 CPU / 15.7 GiB | SLOW=1
 ```
 
-- 镜像那一项读的是 ch1 容器实际用的引用，和 compose 里钉的那行是同一个 digest。两份 log 能不能拿来对比，看的就是这一项。
+- 镜像那一项读的是 ch1 容器实际用的引用，和 compose 里钉的那行是同一个 digest。两份 log 能不能拿来对比，先看这一项。
 - `lab` 后面是 git rev。带「+改动」表示跑的时候脚本或配置有没提交的修改，这时 rev 指的那一版不是实际跑的那一版。
+- `机器` 是宿主机的 CPU、核数、内存，加上 Docker 虚拟机分到的 CPU 和内存。耗时、用了几个核这类数字只在同一台机器的 log 之间能比；`report.sh` 会在汇总表下面列出每份 log 是哪台机器跑的。
 - `SLOW=1` 表示慢速段跑过了；没有这一项的 log 里就没有那几段的证据。提交 `results/` 之前用 `SLOW=1 ./run-all.sh`。
 - 实验 09、21、23 还有第二行，记 Kafka Connect 和 connector 插件的版本。
+- `run-all.sh` 在每份 log 最后追加一行 `# 退出码 N`。没有这一行的 log 不是 `run-all.sh` 跑出来的，或者跑到一半断了。
+- `run-all.sh` 开跑之前会先查一遍脚本里有没有「`$变量` 后面紧跟全角字符」：macOS 自带的 bash 3.2 会把全角字符吃进变量名，`set -u` 下脚本当场退出，写成 `${变量}` 才行。
 
 ## 集群长什么样
 
@@ -71,7 +66,7 @@ bash experiments/02-dedup-window-overflow.sh
 | 版本 | 钉到 `25.3.14.14@sha256:b627d7a9…`（tag + digest） |
 | 拓扑 | 1 keeper + 3 clickhouse-server，1 shard × 3 replicas |
 | cluster 名 | `default` |
-| 库引擎 | 实验 01–21、23 用默认的 `Atomic` 库，DDL 带 `ON CLUSTER default`；生产是 `Replicated` 库。待建实验 22 改用 `Replicated` 库，两种库的差别见 `docs/production-shape.md` 第一节 |
+| 库引擎 | 实验 01–26 用默认的 `Atomic` 库，DDL 带 `ON CLUSTER default`；生产是 `Replicated` 库，实验 27 和待建实验 22 用 `Replicated` 库。两种库的差别见 `docs/production-shape.md` 第一节 |
 | Keeper | 单节点，同样钉到 `25.3.14.14@sha256:2c8b97bb…` |
 | HTTP 端口 | ch1 `18123`、ch2 `18124`、ch3 `18125` |
 | Kafka 栈（`up all`） | Confluent Platform 7.7.0 的社区版镜像（内置 Apache Kafka 3.7.0），同样钉 tag + digest；单 broker；Connect 的 REST 在 `8083` |
@@ -89,16 +84,17 @@ bash experiments/02-dedup-window-overflow.sh
 
 ```
 cluster.sh                 起停集群：up / up all / down / status
-run-all.sh                 跑全部实验并存 results/
+run-all.sh                 跑全部实验并存 results/，最后调 report.sh
+report.sh                  从 results/ 生成 docs/Test-Report.md 里的汇总表
 lib.sh                     共用函数：q / on_all / rr / expect / wait_znodes / provenance / text_log_since
 lib-kafka.sh               实验 09、21、23 用的 Kafka / Connect 函数
 docker-compose.yml         ClickHouse 那套
 docker-compose-kafka.yml   Kafka 栈
 cfg/                       keeper、cluster、三个节点的 macros、KeeperMap 路径前缀
 connect-plugins/           up all 时下载的 connector 插件（.gitignore 里，不进 git）
-experiments/               21 个实验脚本，文件头写了它验的是哪条断言、怎么设计的、参考了什么
+experiments/               25 个实验脚本（15、22 还没建），文件头写了它验的是哪条断言、怎么设计的、参考了什么
 results/                   实跑输出，每份 log 第一行是出处
-docs/                      日常排查用的知识，索引在 docs/README.md
+docs/                      日常排查用的知识和几个方案，索引在 docs/README.md
 ```
 
 日常排查数据问题时要用的机制地图、排查顺序和巡检清单在 [docs/README.md](docs/README.md)，那边记的是「手上要有什么」，这边记的是「跑过什么」。这套 lab 自己的部署形状、它和生产的差别、以及生产上的选型判断，记在 [docs/deployment-architecture.md](docs/deployment-architecture.md)。
@@ -132,15 +128,23 @@ docs/                      日常排查用的知识，索引在 docs/README.md
 
 | # | 验的是什么 | 原来记在哪 | 量到了什么 |
 |---|---|---|---|
-| 09 | 坏批次到底去哪了（8 分区 topic，生产默认值 vs 配 DLQ vs 只开 `errors.tolerance=all`） | `data-problems.md`「少了」 | 默认值下一条类型不合的记录让 task `FAILED`，之后所有分区都卡在 Kafka 里，重启还是 `FAILED`；配了 DLQ，坏记录**所在分区那一整批**（含好记录）都进 DLQ；只开 tolerance 不配 DLQ，那一批静默消失、offset 照常提交；字段名对不上的记录不报错、补默认值 |
+| 09 | 坏批次到底去哪了（8 分区 topic，生产默认值 vs 配 DLQ vs 只开 `errors.tolerance=all`） | `data-problems.md`「少了」 | 默认值下一条类型不合的记录让 task `FAILED`，之后这个 task 管的所有分区都卡在 Kafka 里（lab 只有 1 个 task），重启还是 `FAILED`；配了 DLQ，坏记录**所在分区那一整批**（含好记录）都进 DLQ；只开 tolerance 不配 DLQ，那一批静默消失、offset 照常提交；字段名对不上的记录不报错、补默认值 |
 | 10 | 时区声明、`uniq` 误差、JOIN 放大这三种「不报错的错」 | `data-problems.md`「不对」 | 同一时刻按 `DateTime('UTC')` 落 `20260310`、按 `Asia/Shanghai` 落 `20260311`；`uniq` 在 1000 万上偏 −0.16%，误差两个方向都有；`join_any_take_last_row` 能翻转 `ANY JOIN` 留下的行 |
 | 11 | `parts_to_delay_insert` / `parts_to_throw_insert` 的先后顺序；一条 INSERT 切成几个 part | `mechanism-map.md`、演练条目 | 阈值压到 20 / 25：被拒时正好 25 个 part，之前已拖慢 5 次；`INSERT … SELECT` 每 1111953 行一个 part，客户端发 TSV 每 1048449 行一个，几千行的小批就是一个 |
-| 12 | 单节点 Keeper 出事，集群退化成什么样 | `deployment-architecture.md` 第 2 条 | 停掉：副本立刻只读、读照常、写被拒，默认参数下一条 INSERT 最多卡约 142 秒才报错；**冻住：约 10 秒才转只读，客户端第 30 秒超时，Keeper 回来后服务端那条 INSERT 照样提交**；Keeper 回来几秒内自愈 |
+| 12 | 单节点 Keeper 出事，集群退化成什么样 | `deployment-architecture.md` 第 2 条 | 停掉：副本立刻只读、读照常、写被拒，默认参数下一条 INSERT 最多卡约 142 秒才报错；**冻住：约 10 秒才转只读，客户端第 30 秒超时，Keeper 回来后服务端那条 INSERT 照样提交**；Keeper 回来十几秒内自愈 |
 | 13 | 误删之后各能救回什么 | `daily-checklist.md` 恢复动作 | `DETACH` 可逆；`DROP PARTITION` 没有后悔药，从 `FREEZE` 备份拷回 `detached/` 再 `ATTACH` 能还原到三个副本；`UNDROP` 在 480 秒内有效、`SYNC` 之后无效；先 `SYSTEM DROP REPLICA` 再 `UNDROP`，表回来是只读的，要 `SYSTEM RESTORE REPLICA`；大小阈值可以只对一条语句放开 |
-| 14 | `ReplacingMergeTree` + `FINAL` 到底贵在哪 | `deployment-architecture.md` 第 1 条 | 重投能被折叠；代价跟着「落在重叠区间里的行」走，重叠集中时 part 从 14 堆到 29 耗时不变，同样 14 个 part 重叠铺满时贵两三倍；多 part 状态下手写 `GROUP BY` 去重的内存是 `FINAL` 的十几到几十倍，耗时是几倍到几十倍（这一项每轮波动大） |
+| 14 | `ReplacingMergeTree` + `FINAL` 到底贵在哪 | `deployment-architecture.md` 第 1 条 | 重投能被折叠；代价跟着「落在重叠区间里的行」走，不只看 part 数：重叠集中时 part 从 14 堆到 29，`count() FINAL` 从约 12 ms 涨到约 27 ms，仍比同样 14 个 part、重叠铺满的（约 46 ms）便宜；多 part 状态下手写 `GROUP BY` 去重的内存是 `FINAL` 的十几到几十倍，耗时是两倍到几十倍（这一项每轮波动大） |
 | 21 | 真的 Kafka Connect 超时重投，以及 `exactlyOnce` 管不管用 | `deployment-architecture.md` 第 1 条 | 服务端提交了、客户端超时，框架等到下一个 offset 提交点（这次约 55 秒后）原样重投，token 不变：窗口在就拦下，窗口认不出就第二份落地，**开了 `exactlyOnce` 也一样**；worker 崩溃后重投、批次边界变了，窗口在也拦不住，只有 `exactlyOnce` 拦得住 |
 | 23 | `exactlyOnce` 的状态和新来的一批对不上时，task 会不会停、数据会不会丢 | 实验 21 只造过「重读的一批越过记录区间」那一支 | 崩溃前提交点之后写过不止一批（生产上几乎每次崩溃都是）：默认 `errors.tolerance=none` 下重启后 task `FAILED`（`State MISMATCH`），没多写、数据还在 Kafka，打开 `tolerateStateMismatch` 才自己恢复；`errors.tolerance=all` 下 task 不停，已经写过的那几批整批进 DLQ。插入在服务端没提交、客户端只看到超时，之后批次边界又变了：`none` 下 task `FAILED`（`State CONTAINS`），`tolerateStateMismatch` 管不到，要删状态行；**`all` 加 DLQ，这一段只剩 DLQ 里那一份；`all` 不配 DLQ，这一段丢了、offset 照常提交** |
-| 24 | Kafka 数据去重与生成报表的物化视图全流程 | `dedup-solution.md` 验证计划 | `deduplicate_blocks_in_dependent_materialized_views` 的取值影响；迁移 `ReplicatedReplacingMergeTree`；`FINAL` 保留最后写入行 |
+
+24–27 验的是落到这套生产上的方案：报表链路（[docs/report-pipeline.md](docs/report-pipeline.md)）和换引擎（[docs/engine-migration-runbook.md](docs/engine-migration-runbook.md)）。
+
+| # | 验的是什么 | 量到了什么 |
+|---|---|---|
+| 24 | 物化视图能不能跟着源表去重 | `deduplicate_blocks_in_dependent_materialized_views` 默认 0 时，源表拦下的重投物化视图照样再算一次（25.3 源码说明写的是相反的）；设成 1 才跟着拦，而且要对所有写入一律设、目标表自己的窗口也要盖住重投；设成 1 不会误伤不同的源批次，但不能和 `async_insert` 一起开（直接报错）。窗口外的重放和「重发新版本」式的改数据，明细 `FINAL` 是对的，物化视图多算，合并之后也不会变回来 |
+| 25 | 报表怎么发现漂移、怎么安全地重算、时区怎么上卷 | 三种重复和改数据让报表偏的量和注入的一致，按天对账准确找出偏了的天；从明细 `FINAL` 重算一天再 `REPLACE PARTITION`，三个副本逐桶一致；不过闸会把重算期间的迟到写入抹掉。30 分钟桶对上海、加尔各答（+5:30）、纽约（含夏令时那天）上卷全对，加德满都（+5:45）对不上 |
+| 26 | 大查询限 `max_threads` 的效果和代价 | 限 N 就不超过 N 个核；报表重算本来只用 2 个核左右，限到 2 只慢 16%–37%；能并行的大聚合限到 2 慢 3.6 倍（12 CPU 的虚拟机上）；不限线程的重算跑着时，同节点小批写入的 p95 是 33–69 ms，限 2 之后 9–19 ms（只记录、不断言，4 次运行方向一致） |
+| 27 | 明细表在线换成 `ReplicatedReplacingMergeTree` | `Replicated` 库里：`ATTACH` 搬历史写 0 行；停了 merge 的表，有可合并的 part 时复制队列不会归零，排空要用 `SYNC REPLICA … LIGHTWEIGHT`；停 sink、排空、按 `part_log` 补齐、按 `system.parts` 行数过闸之后 `EXCHANGE`，sink 写的每个 offset 恰好一份、物化视图跟着名字走；不排空就切换会把在途的那批写进旧表；同名 `UNION ALL` 视图不能写；回滚之后一行不丢，回滚的闸要拿执行 `REPLACE` 的副本当基准，各副本各比各的会误报 |
 
 还没做的实验也记在 `docs/` 里，按编号找：
 
@@ -258,4 +262,4 @@ docs/                      日常排查用的知识，索引在 docs/README.md
 - **那次 Keeper 抖动的负载形状。** 生产上是 `zoo_keeper_request` 在途请求从常态 5 到 15 涨到几千。单节点 keeper、没有负载，制造不出同样的排队。实验 12 用冻住容器复现了它对 INSERT 的效果（卡在提交、客户端超时、之后照样提交），但「几千个在途请求」本身没有。
 - **tiered storage 和 S3。** 文章一那笔 856 GiB 分区里重写 11 GiB 的账、文章四里 30 GiB 要从 S3 拉回来的代价，都依赖对象存储那一层。挂 minio 能搭出形状，量不出真实的延迟和费用。实验 20 的硬链接结论也只对本地盘成立。
 - **托管那两层。** ClickHouse 在 Aiven 上：`SHOW CREATE TABLE` 对 avnadmin 被拒、`system.tables.engine_full` 被抹掉、负载均衡把只读副本摘出路由，都是托管服务的行为。sink connector 在 Confluent Cloud 上全托管：运行时的版本、`offset.flush.interval.ms` 之类的 worker 配置都拿不到，lab 一律用 Apache Kafka 3.7.0 的默认值；托管页面上和 Apache Kafka 默认值不同的项（比如 `errors.retry.timeout`），对照见 `docs/mechanism-map.md`。
-- **规模。** 生产是单个日分区两亿行、30 GiB，三副本每秒建 124 个块；上游是单 topic 8 个分区、峰值每秒 1 万条。本地用的是把窗口压小来等价缩放，验的是机制不是量级；实验 09 的 topic 也建成 8 个分区，但没压吞吐。量级里能带到生产的那部分（内存、磁盘、part 数），打算用更大的机器补，见待建实验 22。
+- **规模。** 生产上文章里那个 region，单个日分区两亿行、30 GiB，三副本每秒建 124 个块（别的 region 一天从一千多万行到三亿多行不等，见 `docs/production-shape.md` 第二节）；上游是单 topic 8 个分区、峰值每秒 1 万条。本地用的是把窗口压小来等价缩放，验的是机制不是量级；实验 09 的 topic 也建成 8 个分区，但没压吞吐。量级里能带到生产的那部分（内存、磁盘、part 数），打算用更大的机器补，见待建实验 22。

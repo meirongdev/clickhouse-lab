@@ -99,5 +99,3 @@ expect "换成字面量 '$REPL' 之后副本没了" \
 
 for t in drop_plain drop_sync tmp_reuse macro_check; do q1 "DROP TABLE IF EXISTS $t SYNC" >/dev/null 2>&1; done
 exit $FAILED
-#   - ClickHouse Official Documentation (2025/2026)
-#     https://clickhouse.com/docs/en/

@@ -2,8 +2,8 @@
 
 这一份记的是针对生产那条写入链路选定的去重方案：为什么不靠 sink 的 `exactlyOnce`，主流做法是什么，落到这套生产上分哪几步，每一步的依据和出处，以及还要怎么对照生产的脱敏数据去验证。
 
-- **状态：** 方案记录，2026-10-07。还没在生产上执行。
-- **证据分三档：** 有的已经在 lab 上做成了实验；有的只用一次性探针在 lab 上看过一次（第八节附了探针的 SQL，正式断言放进实验 24）；有的还只是推断。每一条都按 [docs/README.md](README.md#标注约定) 的约定标了。
+- **状态：** 方案记录，2026-10-07；2026-10-11 在第二、三节补了别家怎么取舍。还没在生产上执行。
+- **证据分三档：** 有的已经在 lab 上做成了实验；有的只用一次性探针在 lab 上看过一次（第八节，后来已经写成实验 24、25、27 的断言）；有的还只是推断。每一条都按 [docs/README.md](README.md#标注约定) 的约定标了。
 - **还没核的生产信息集中在第六节。** 那一节的只读 SQL 拿到结果之前，第四节里标「待核」的前提都不要当真。
 
 生产的形态（写入入口、表、三种重复、下游聚合）见 [production-shape.md](production-shape.md)；清理历史重复的 runbook 见 [review-dedup-replace-plan.md](review-dedup-replace-plan.md#改过的-runbook)。
@@ -16,7 +16,7 @@
 - **表：** Aiven for ClickHouse 25.3、`Replicated` 库、三副本；明细表 `events_wide`，`ORDER BY (settle_ms, id, rev)`，按结算日分区。
 - **三种重复，都是除 `create_time` 外整行相同：**
   - producer 重试：broker 里存了两份；
-  - sink 超时重投：同一批原样再写一次，间隔 30–90 秒；
+  - sink 超时重投：同一批原样再写一次，间隔 32–124 秒（一轮是 30–90 秒，到 124 秒的经历了两轮）；
   - sink 重启重放：几分钟的 offset 整段重放，批次边界会变。
 - **下游聚合：** 按 `create_time` 窗口增量累加，不按键去重。明细里删掉一行，聚合不会自己变回来。
 
@@ -34,8 +34,15 @@
   - `errors.tolerance=all` 配了 DLQ 时，重读的那几批进 DLQ；
   - 写到一半批次边界又变了的那一段，只剩 DLQ 里一份；没配 DLQ 就哪里都没有了。
 - **它要 KeeperMap 存状态。** KeeperMap 依赖服务端配置 `keeper_map_path_prefix`（已核，[KeeperMap 文档](https://clickhouse.com/docs/reference/engines/table-engines/special/keepermap)）。Aiven 上开没开没核过（待核）。
+- **别家写进 ClickHouse 的 exactly-once 也是同一个机制，也受去重窗口约束（已核）。** ClickHouse 不能把数据和 offset 放在一个事务里提交，所以各家的做法都是：记下每一批的 offset 区间，失败后按原区间重放、带同一个 token，交给块级去重拦下。
+  - 这个 connector 自己：发布博客里写的设计就是靠 ClickHouse 的插入去重，出故障时一定会收到重复，由去重拦掉（[ClickHouse 博客](https://clickhouse.com/blog/kafka-connect-connector-clickhouse-with-exactly-once)，2023-01）。
+  - ClickHouse Cloud 的 ClickPipes（Kafka）：默认至少一次，exactly-once 是可选模式，token 是 `topic:partition:firstOffset-lastOffset`。文档明说 token 出了去重窗口之后再重放，就会再写一份，并建议按最坏的重放延迟调大窗口（[ClickPipes Kafka 最佳实践](https://clickhouse.com/docs/integrations/clickpipes/kafka/best-practices#delivery-semantics)）。
+  - eBay 的 Block Aggregator：把每一批的边界记在 Kafka 的提交元数据里，失败后重新组出一模一样的块，交给 ClickHouse 去重；另做了一个运行时检查，exactly-once 依赖的不变量被破坏就告警（[GitHub](https://github.com/eBay/block-aggregator)、[Kafka Summit 2021 演讲](https://www.kafka-summit.org/sessions/real-time-data-ingestion-from-kafka-to-clickhouse-with-deterministic-re)）。
+  - ClickHouse 的 Kafka 表引擎：默认至少一次（[Altinity KB](https://kb.altinity.com/altinity-kb-integrations/altinity-kb-kafka/02-consumption-patterns/altinity-kb-exactly-once-semantics/)）；新的实验模式把 offset 存进 Keeper，记下上一批消费了多少条，插入失败时重新消费同样多条，让去重能生效（[Kafka 表引擎文档](https://clickhouse.com/docs/reference/engines/table-engines/integrations/kafka)）。
 
-结论：不开。sink 这一层能做的，是让每一批都带上 `insert_deduplication_token`，而它不开 `exactlyOnce` 也会带（已核，`QueryIdentifier.java:56-61`）。
+  Snowflake 的 exactly-once 是另一回事：offset token 和数据在目标库里一起提交（[Snowpipe Streaming 文档](https://docs.snowflake.com/user-guide/snowpipe-streaming/snowpipe-streaming-channels)）。ClickHouse 没有这个能力，所以开不开 `exactlyOnce`，同一批的重投都要靠去重窗口兜着，这也是 M2 要调大窗口的原因。
+
+结论：不开。sink 这一层能做的，是让每一批都带上 `insert_deduplication_token`，而它不开 `exactlyOnce` 也会带（已核，`QueryIdentifier.java:56-61`）。用 ClickHouse 做分析的项目大多也是这么选的，见第三节。
 
 ## 三、主流做法：接受至少一次，按键幂等
 
@@ -44,6 +51,20 @@ ClickHouse 不提供「只写一次」的开关。官方和社区的主流做法
 - **官方的去重策略**列的就是 `ReplacingMergeTree`，以及 `CollapsingMergeTree` / `VersionedCollapsingMergeTree`，读的时候用 `FINAL`（已核，[去重策略](https://clickhouse.com/docs/concepts/features/operations/insert/deduplication)）。
 - **ClickHouse 自家的 CDC 接入 ClickPipes** 把表映射成 `ReplacingMergeTree`：更新是带新版本号的插入，删除是带删除标记的插入（已核，[ClickPipes 去重](https://clickhouse.com/docs/integrations/clickpipes/postgres/deduplication)）。
 - **块级去重是重试保护，不是幂等保证。** 文档原话：重试期间插进来的块超过窗口，去重就可能失效（已核，[重试去重的窗口限制](https://clickhouse.com/docs/concepts/features/operations/insert/deduplicating-inserts-on-retries#deduplication-window-limit)）。上游在 25.9 把块数窗口从 1000 提到 10000（[PR #86820](https://github.com/ClickHouse/ClickHouse/pull/86820)），在 25.10 把时间窗口从一周降到一小时（[PR #87414](https://github.com/ClickHouse/ClickHouse/pull/87414)），定位就是短时间内的重试（推断）。
+
+别的项目怎么取舍（已核）：
+
+- **分析类大多接受至少一次，靠表引擎按键去重，接受最终一致。**
+  - Sentry 的 Snuba：文档原话是 consumer 保证每批至少交给 ClickHouse 一次，选对表引擎去重，接受最终一致，就能做到 exactly once（[Snuba 架构](https://getsentry.github.io/snuba/architecture/overview.html#ingestion)）。
+  - PostHog：Kafka 表引擎经物化视图写进 `ReplicatedReplacingMergeTree`，同时提醒去重不是保证，仍要尽量别写重复（[PostHog 的 ClickHouse 说明](https://posthog.com/docs/how-posthog-works/clickhouse)）。
+  - ClickPipes（Kafka）的默认模式也是至少一次，文档推荐配 `ReplacingMergeTree`（同第二节那个链接）。
+  - 别的库也一样：Confluent 的 JDBC sink 是至少一次，靠 upsert 做幂等（[JDBC Sink 文档](https://docs.confluent.io/kafka-connectors/jdbc/current/sink-connector/overview.html)）。
+- **重复直接等于多收钱的，写入之前就去重。** OpenMeter 做用量计费，弃用了 Kafka Connect（一条坏记录会让整批进 DLQ），自己写消费端：先在批内去重，再用 Redis 按事件去重，入库前逐条校验（[OpenMeter 博客](https://openmeter.io/blog/consistent-kafka-consumer)，2023-10）。代价是自己养一套消费端和去重存储。
+- **真正的 exactly-once 要目标库能原子提交 offset。** Snowflake 的 Kafka connector 默认就是（第二节）；Confluent 的 S3 sink 用 topic、分区、起始 offset 给文件命名，重写只是覆盖同一个对象（[S3 Sink 文档](https://docs.confluent.io/kafka-connectors/s3-sink/current/overview.html)）。ClickHouse 不在这一类。
+
+取舍看三件事：目标库能不能原子提交 offset；重复的代价有多大，分析类容得下短时间的重复，计费类容不下；批次边界在不在自己手里，托管 connector 不在，eBay、OpenMeter 都是自研加载器才握住了它。这套生产是 ClickHouse 加托管 connector，用法是分析报表，所以走「至少一次 + 按键折叠」，见第四节。
+
+**要拍板的一件事：报表上的金额能不能接受最终一致。** 明细这边按键折叠，多出来的那份合并或 `FINAL` 之后就看不到了。报表是物化视图增量累加的，窗口外的重复会先让它多算，要等对账、重算之后才改回来（M5）。如果要求报表金额任何时刻都不能多算，就得走 OpenMeter 那种写入前去重，本方案没有设计这一条。
 
 每一层管得住哪种重复：
 
@@ -66,19 +87,21 @@ ClickHouse 不提供「只写一次」的开关。官方和社区的主流做法
 
 在 sink 的 `clickhouseSettings` 里加 `deduplicate_blocks_in_dependent_materialized_views=1`。这些设置只作用在数据 INSERT 上（lab 实测，实验 21、23），也可以写进 sink 用户的 profile。
 
-- **依据：** lab 探针（2026-10-06，第八节附 SQL），25.3.14.14 上：
+- **依据（lab 实测，实验 24）：**
   - 默认值 0：源表的块级去重拦下了重试（`part_log` 里记 `error = 389`），物化视图却又累加了一次。带不带 token 都一样。
   - 设成 1：物化视图跟着一起去重。
   - 25.3 自己的设置说明写的是「源表拦下的块不会进物化视图」（[Settings.cpp:3650-3664](https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Core/Settings.cpp#L3650-L3664)），和实测相反，以实测为准。
 - **管什么：** 窗口拦下的那些重投，不再在下游聚合里多算。窗口外的重复（重放、producer 重复）它管不了，要靠 M5。
 - **代价和风险：**
-  - 设成 1 之后，物化视图往**目标表**写的块由目标表自己做去重检查，所以目标表的 `replicated_deduplication_window` 也要按 M2 调大（推断，V3 验）。
-  - 设置说明里写了默认值为 0 的原因：不同的源插入聚合出来可能是一模一样的块，按数据哈希去重会误删。sink 每一批都带 token，物化视图的块应该用源 token 派生、不会撞（推断，V2 验）。
+  - 设成 1 之后，物化视图往**目标表**写的块由目标表自己做去重检查：目标表的窗口裁掉了那一批，源表拦下了、物化视图照样多算。所以目标表的 `replicated_deduplication_window` 也要按 M2 调大，不能比源表小（lab 实测，实验 24 五）。
+  - 设置说明里写了默认值为 0 的原因：不同的源插入聚合出来可能是一模一样的块，按数据哈希去重会误删。25.3 上不会：两个不同的源批次聚合出一模一样的块，设成 1 也都算进去了，带不带 token 都一样（lab 实测，实验 24 四）。
+  - 要对所有写入一律生效：首写用 0、重投用 1，照样双算（lab 实测，实验 24 三）。
+  - 不能和 `async_insert` 一起开：两个都开时 INSERT 直接报 `Code: 344`（lab 实测，实验 24 七；由 `throw_if_deduplication_in_dependent_materialized_views_enabled_with_async_insert` 控制，默认 1，已核 [Settings.cpp:3665](https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Core/Settings.cpp#L3665)）。connector 默认 `async_insert=0`（已核 [ClickHouseSinkConfig.java:227](https://github.com/ClickHouse/clickhouse-kafka-connect/blob/v1.3.9/src/main/java/com/clickhouse/kafka/connect/sink/ClickHouseSinkConfig.java#L227)），别在 `clickhouseSettings` 里打开它。
 - **前提（待核）：** 生产的下游聚合是物化视图喂的，而不是定时跑的 `INSERT … SELECT`。如果是定时作业，这一项没用，聚合读的是明细表里已经存在的重复，见 M5。
 
 ### M2：把去重窗口调到盖得住一轮重投
 
-`ALTER TABLE events_wide MODIFY SETTING replicated_deduplication_window = …`。M1 打开的话，物化视图的目标表也一起调。
+`ALTER TABLE events_wide MODIFY SETTING replicated_deduplication_window = …`。M1 打开的话，物化视图的目标表也一起调，不能比明细表小（lab 实测，实验 24 五）。
 
 - **依据：** 窗口要不小于「建块速率 × 最长重投间隔」（实验 02 的机制）。
   - 一轮重投最长约 90 秒（30 秒超时，加上等到下一个 offset 提交点，实验 21 实测约 55 秒）；生产上见过 124 秒，即两轮。
@@ -103,7 +126,7 @@ producer 配 `enable.idempotence=true`、`acks=all`、`max.in.flight.requests.pe
 
 - **依据：**
   - 排序键 `(settle_ms, id, rev)` 本身就是业务键。三种重复都是除 `create_time` 外整行相同，合并时会折叠成一行。迟到的补发按 `settle_ms` 落在同一个分区，一样会被折叠。
-  - lab 探针（2026-10-06，第八节）：同键的 `ReplicatedMergeTree` 分区能直接 `ATTACH PARTITION … FROM` 进 `ReplicatedReplacingMergeTree`。之后 `FINAL` 和 `SETTINGS final = 1` 都把重复折叠掉了，`OPTIMIZE … FINAL` 之后重复在物理上也没了。
+  - 同键的 `ReplicatedMergeTree` 分区能直接 `ATTACH PARTITION … FROM` 进 `ReplicatedReplacingMergeTree`，只挂硬链接；之后 `FINAL` 把迁移前就有的重复折掉了（lab 实测，实验 27，`Replicated` 库）。
   - `final` 设置把 `FINAL` 自动加到查询里所有适用的表上（已核，[Settings.cpp:2056-2058](https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Core/Settings.cpp#L2056-L2058)），可以写进报表用户的 profile。
   - `FINAL` 的代价量过（lab 实测，实验 14）：按排序键范围查，贵一倍上下；比手写 `GROUP BY` 去重省十几到几十倍内存。按时间排序、只重投最近一批的表，重叠天然是集中的，正好落在便宜的那一头。
 - **管什么：** 三种重复都管，不依赖窗口。
@@ -113,25 +136,25 @@ producer 配 `enable.idempotence=true`、`acks=all`、`max.in.flight.requests.pe
   - 下游如果按 `create_time` 窗口从 `FINAL` 重算（M5），这一行会算进更晚的窗口。要它算在第一次写入的窗口，得加一列随时间递减的版本，例如 `MATERIALIZED` 表达式；而 `ATTACH PARTITION` 要求两张表结构一致，所以旧表也要先加这一列（推断，V1 验）。
 - **代价和风险：**
   - **合并是异步的。** 没合并的重复在不带 `FINAL` 的读里照样能看到。要精确的读，一律带 `FINAL` 或者开 `final = 1`。
-  - **冷层上的老分区不太再合并**（大部分已经在对象存储上，production-shape.md 第三节）。补发进去的重复可能长期留在物理层，靠 `FINAL` 读时折叠，或者对那个分区单独 `OPTIMIZE … FINAL`（会重写一整天）。
+  - **冷层上的老分区不太再合并**（推断，V9 验；大部分已经在对象存储上，production-shape.md 第三节）。补发进去的重复可能长期留在物理层，靠 `FINAL` 读时折叠，或者对那个分区单独 `OPTIMIZE … FINAL`（会重写一整天）。
   - **迁移本身有成本：**
     - 按分区 `ATTACH`，本地盘上是硬链接（lab 实测，实验 20），对象存储上没验过（待一手观察，V7）；
     - 在 `Replicated` 库里，`ATTACH` / `REPLACE PARTITION` 不进库的复制日志，只在发起的节点执行，另两个副本靠表自己的复制拿数据（lab 实测，production-shape.md 第一节）；
-    - 切写入要么改 sink 的表映射，要么交换两张表；切换期间的迟到写入，和 runbook 的 R4 是同一个问题（V1）。
+    - 切写入用 `EXCHANGE TABLES`，切之前停 sink、排空、把搬迁期间又被写过的分区补齐、按行数过闸；整套步骤和回滚见 [engine-migration-runbook.md](engine-migration-runbook.md)（lab 实测，实验 27）。
   - **宽表上的 `FINAL` 代价**在两亿、三亿行的日分区上没量过（待一手观察，V6）。
 - **不需要 `is_deleted` 列：** 这里没有按键删除的语义。
 
 ### M5：下游聚合要能重算
 
-`ReplacingMergeTree` 救不了物化视图：物化视图在插入时就触发，看不到后来的合并。lab 探针里，窗口外重放一次之后，明细 `FINAL` 只剩 1 行，物化视图的聚合已经算到 3 次。所以窗口外的重复一定会在增量聚合里多算。三种做法，可以组合：
+`ReplacingMergeTree` 救不了物化视图：物化视图在插入时就触发，看不到后来的合并。窗口外重放一次、再改一次金额之后，明细 `FINAL` 只剩新版本那一行，物化视图把三次都算了进去，两张表都合并之后也不会变回来（lab 实测，实验 24 六）。所以窗口外的重复和改数据一定会在增量聚合里多算。三种做法，可以组合：
 
 - **a. 可刷新物化视图，从 `FINAL` 重算最近 N 天**（已核，[可刷新物化视图](https://clickhouse.com/docs/concepts/features/materialized-views/refreshable-materialized-view)）。
   - lab 探针：25.3 上默认就能建，从 `FINAL` 重算的结果正确。
   - 但在 `Atomic` 库里，不带 `APPEND` 的可刷新物化视图不能整表替换一张复制表，报 `This combination doesn't work`。生产是 `Replicated` 库，这种用法行不行没验过（待一手观察，V4）。
 - **b. 报表直接在明细上带 `FINAL` 现算。** 适合窗口小、查询少的报表。
-- **c. 保留现有的增量聚合，修复流程里重算受影响的窗口。** REPLACE runbook 清掉明细重复之后，要补一步：按被删行的 `create_time` 重算对应窗口的聚合。现在的 runbook 还没有这一步。
+- **c. 保留现有的增量聚合，对账找出偏了的天，从明细 `FINAL` 重算那一天，过闸之后 `REPLACE PARTITION` 换进报表。** 对账查询、重算步骤和闸见 [report-pipeline.md](report-pipeline.md) 第三节（lab 实测，实验 25：三种重复和改数据造成的偏差都被对账找到、重算后三个副本逐桶一致；不过闸会把重算期间的迟到写入抹掉）。
 
-不管选哪种，都要先定 M4 里「留下哪一份」：它决定重复行最后算在哪个 `create_time` 窗口。
+报表还按 `create_time` 窗口切的话，不管选哪种，都要先定 M4 里「留下哪一份」：它决定重复行最后算在哪个窗口。改按 `settle_ms` 切（report-pipeline.md 第一节的建议，待核）就没有这个问题，重复的几份落在同一个桶里。
 
 ### M6：发现和修复
 
@@ -150,9 +173,9 @@ producer 配 `enable.idempotence=true`、`acks=all`、`max.in.flight.requests.pe
 
 ## 五、上线顺序
 
-1. **先只读地核（第六节的 V-c）。** 下游聚合是物化视图还是定时作业；MV 去重设置、去重窗口有没有被改过；producer 配置；Aiven 能不能 `MODIFY SETTING`。
-2. **低成本、能马上见效的：** M1、M2（明细表和物化视图目标表一起调）、M3、M6 的对账和告警。上线之前先过一遍 V-a 的小规模断言（V1–V3）。
-3. **结构性的：** M4 和 M5 一起做，先定「留下哪一份」。生产量级的验证（V5–V8）通过之后再上。
+1. **先只读地核（第六节的 V-c），再和报表的使用方定两件事。** 要核的：下游聚合是物化视图还是定时作业；MV 去重设置、去重窗口有没有被改过；producer 配置；Aiven 能不能 `MODIFY SETTING`。要定的：报表金额能不能接受最终一致（第三节末尾）；报表的桶按 `settle_ms` 还是 `create_time` 切（report-pipeline.md 第一节）。
+2. **低成本、能马上见效的：** M1、M2（明细表和物化视图目标表一起调）、M3、M6 的对账和告警。V-a 的小规模断言 V1–V3 已经在实验 24、27 里做掉，只差 V1 里「递减版本列」那一项。
+3. **结构性的：** M4 和 M5 一起做，先定「留下哪一份」。和它们有关的生产量级验证（V6–V9）通过之后再上。
 4. **历史重复：** 用 REPLACE runbook 修，带上重算聚合那一步。
 
 ## 六、验证计划：对照生产的脱敏数据
@@ -165,8 +188,8 @@ producer 配 `enable.idempotence=true`、`acks=all`、`max.in.flight.requests.pe
 
 | 验证项 | 跑在哪 | 每个 ClickHouse 容器的限额 | 宿主机至少 | 盘至少 | 要多久 |
 |---|---|---|---|---|---|
-| V-a（V1–V4，实验 24） | 现在的 lab，`./cluster.sh up`：三副本加 Keeper | 不用限 | 现在这套就够：README 记的实测环境是 OrbStack 虚拟机 10 CPU / 16 GiB | 几 GB | 几分钟 |
-| V5 窗口调到 2 万 | 三副本（三个副本各自裁剪，单副本看不全）；数据量不大，数的是块不是行 | A 档 4 vCPU / 16 GB，即实验 22 的 P1 | P1 那台：笔记本 10 核 / 32 GB，OrbStack 内存调到 24 GB | 50 GB | 至少半小时：2 万个块按每秒 124 个约 3 分钟灌满，之后要看几十轮裁剪；窗口 1000 和 2 万在同一台机器上各跑一次，只比两者的差别 |
+| V-a（V1–V4，实验 24、27） | 现在的 lab，`./cluster.sh up`：三副本加 Keeper | 不用限 | 现在这套就够：`results/` 是在 M2 Pro（12 核 / 32 GiB）上的 OrbStack 虚拟机 12 CPU / 16 GiB 里跑的 | 几 GB | 几分钟 |
+| V5 窗口调到 2 万 | 三副本（三个副本各自裁剪，单副本看不全）；数据量不大，数的是块不是行 | A 档 4 vCPU / 16 GB，即实验 22 的 P1 | 同 P1：10 核以上、32 GB 的 Mac 就行，OrbStack 内存调到 24 GB | 50 GB | 至少半小时：2 万个块按每秒 124 个约 3 分钟灌满，之后要看几十轮裁剪；窗口 1000 和 2 万在同一台机器上各跑一次，只比两者的差别 |
 | V6 `FINAL` 代价、V8 重算聚合、V9 合并折叠 | 单副本就够：查询、重算、merge 的代价在一个副本上量 | 两亿行：B 档 16 vCPU / 64 GB（P2）；三亿多行：C 档 8 vCPU / 32 GB（P3） | P2：16 核 / 80 GB；P3：8 核 / 48 GB | P2：150 GB；P3：250 GB | 按小时计；P1 跑完之后，按每千万行的耗时推算 |
 | V7 迁移一天 | 耗时和写入字节在单副本上量（P2、P3）；「另外两个副本是不是本地挂硬链接」要三副本（P4） | P4：3 × B 档或 3 × C 档 | 两亿行：48 核 / 224 GB；三亿多行：24 核 / 128 GB | 两亿行：400 GB；三亿多行：700 GB | 同上 |
 | V7 对象存储那一半 | 实验 22 的 P6：挂 MinIO，加 tiered 存储策略，从一千万行起 | 同 P1 | P1 那台 | 再多留一份分区大小给 MinIO（推断） | 同 P1 |
@@ -179,16 +202,14 @@ producer 配 `enable.idempotence=true`、`acks=all`、`max.in.flight.requests.pe
 - **三副本挤在一台机器上，耗时不能和生产比。** 三份数据写同一块盘，merge 也是三个副本各做各的。V5、V7 只看相对变化和字节数。
 - **省掉重新造数据：** 实验 22 跑 P2、P3 时带 `KEEP=1` 留下数据，接着按 V7 → V6 → V9 → V8 的顺序跑：先把造好的 `ReplicatedMergeTree` 分区 `ATTACH` 进 `ReplicatedReplacingMergeTree`（顺带量 V7 的耗时），再在新表上量 `FINAL`、等合并、最后重算聚合。两亿、三亿行造一次就要几个小时，这样每档只造一次。
 
-### V-a 小规模（lab，实验 24）
+### V-a 小规模（lab）
 
-把 2026-10-06 的探针写成断言，再补几条：
-
-| # | 验什么 | 怎么判 |
-|---|---|---|
-| V1 | 迁移：`ATTACH PARTITION … FROM` 进 `ReplicatedReplacingMergeTree`；`Atomic` 库和 `Replicated` 库各跑一次；两张表在 `Replicated` 库里怎么交换；加「递减版本列」之后旧分区还能不能 `ATTACH`、合并之后留下的是不是最早那份 | 行数、`FINAL` 行数、留下的 `create_time`；报错原文 |
-| V2 | `deduplicate_blocks_in_dependent_materialized_views` 的 0 / 1，以及带 token / 不带 token 共四种组合（探针已经看过一次）；不同源批次聚合出相同块时，设成 1 会不会误去重 | 物化视图目标表里的行数、合计值 |
-| V3 | 打开 M1 之后，物化视图目标表的去重窗口是不是也要调：目标表 `blocks/` 里的节点数；目标表窗口小于源表窗口时，重投还拦不拦得住 | 目标表的 `blocks/` 节点数、聚合值 |
-| V4 | `Replicated` 库里，不带 `APPEND` 的可刷新物化视图能不能整表替换复制表；带 `APPEND` 时怎么只重算最近 N 天 | 建视图的报错原文、刷新后的结果 |
+| # | 验什么 | 怎么判 | 状态 |
+|---|---|---|---|
+| V1 | 迁移：`ATTACH PARTITION … FROM` 进 `ReplicatedReplacingMergeTree`；`Atomic` 库和 `Replicated` 库各跑一次；两张表在 `Replicated` 库里怎么交换；加「递减版本列」之后旧分区还能不能 `ATTACH`、合并之后留下的是不是最早那份 | 行数、`FINAL` 行数、留下的 `create_time`；报错原文 | 做掉了：实验 27（`Replicated` 库，`EXCHANGE TABLES`）。「递减版本列」没做 |
+| V2 | `deduplicate_blocks_in_dependent_materialized_views` 的 0 / 1，以及带 token / 不带 token 共四种组合（探针已经看过一次）；不同源批次聚合出相同块时，设成 1 会不会误去重 | 物化视图目标表里的行数、合计值 | 做掉了：实验 24 一、二、四 |
+| V3 | 打开 M1 之后，物化视图目标表的去重窗口是不是也要调：目标表 `blocks/` 里的节点数；目标表窗口小于源表窗口时，重投还拦不拦得住 | 目标表的 `blocks/` 节点数、聚合值 | 做掉了：实验 24 五 |
+| V4 | `Replicated` 库里，不带 `APPEND` 的可刷新物化视图能不能整表替换复制表；带 `APPEND` 时怎么只重算最近 N 天 | 建视图的报错原文、刷新后的结果 | 没做（待一手观察） |
 
 ### V-b 生产量级（合成数据，宽表，接在实验 22 上）
 
@@ -246,7 +267,7 @@ WHERE path = (SELECT zookeeper_path FROM system.replicas WHERE database = '{db}'
 
 ## 七、参考来源
 
-每一条都核过能打开、内容对得上（2026-10-05 至 10-07）。源码链接钉在 tag 上，行号只对那个 tag 成立；文档链接是当前版本的文档，和 25.3 有出入时以源码和实测为准。
+每一条都核过能打开、内容对得上（2026-10-05 至 10-11）。源码链接钉在 tag 上，行号只对那个 tag 成立；文档链接是当前版本的文档，和 25.3 有出入时以源码和实测为准。
 
 **ClickHouse 官方文档**
 
@@ -267,6 +288,7 @@ WHERE path = (SELECT zookeeper_path FROM system.replicas WHERE database = '{db}'
 | 来源 | 支撑哪一条 |
 |---|---|
 | [Settings.cpp:3650-3664](https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Core/Settings.cpp#L3650-L3664) | M1：`deduplicate_blocks_in_dependent_materialized_views` 的说明（和实测相反） |
+| [Settings.cpp:3665](https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Core/Settings.cpp#L3665) | M1：和 `async_insert` 一起开时报错的开关，默认打开 |
 | [Settings.cpp:2056-2058](https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Core/Settings.cpp#L2056-L2058) | M4：`final` 设置 |
 | [MergeTreeSettings.cpp:148-149](https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Storages/MergeTree/MergeTreeSettings.cpp#L148-L149) | M2：25.3 的窗口默认值 |
 | [ReplicatedMergeTreeCleanupThread.cpp:82-110](https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Storages/MergeTree/ReplicatedMergeTreeCleanupThread.cpp#L82-L110) | M2：裁剪线程的自适应周期（实验 02） |
@@ -280,7 +302,23 @@ WHERE path = (SELECT zookeeper_path FROM system.replicas WHERE database = '{db}'
 | [DESIGN.md:81](https://github.com/ClickHouse/clickhouse-kafka-connect/blob/v1.3.9/docs/DESIGN.md#L81) | 第二节：`BEFORE` 状态时重新插入、交给 ClickHouse 去重 |
 | [QueryIdentifier.java:56-61](https://github.com/ClickHouse/clickhouse-kafka-connect/blob/v1.3.9/src/main/java/com/clickhouse/kafka/connect/util/QueryIdentifier.java#L56-L61) | 第二节、M2：token 的格式，不开 `exactlyOnce` 也带 |
 | [ClickHouseWriter.java:1447-1454](https://github.com/ClickHouse/clickhouse-kafka-connect/blob/v1.3.9/src/main/java/com/clickhouse/kafka/connect/sink/db/ClickHouseWriter.java#L1447-L1454) | M1：`clickhouseSettings` 加在数据 INSERT 上 |
+| [ClickHouseSinkConfig.java:227](https://github.com/ClickHouse/clickhouse-kafka-connect/blob/v1.3.9/src/main/java/com/clickhouse/kafka/connect/sink/ClickHouseSinkConfig.java#L227) | M1：connector 默认 `async_insert=0`，用户没配才生效 |
 | [Kafka producer `enable.idempotence`](https://kafka.apache.org/37/configuration/producer-configs/#producerconfigs_enable.idempotence) | M3 |
+
+**别的项目和产品的做法**
+
+| 来源 | 支撑哪一条 |
+|---|---|
+| [ClickHouse 博客：官方 Kafka connector 的 exactly-once 设计](https://clickhouse.com/blog/kafka-connect-connector-clickhouse-with-exactly-once) | 第二节：connector 的 exactly-once 靠插入去重兜底 |
+| [ClickPipes Kafka 最佳实践：投递语义](https://clickhouse.com/docs/integrations/clickpipes/kafka/best-practices#delivery-semantics) | 第二节：exactly-once 模式受去重窗口约束，建议调大窗口；第三节：默认至少一次，推荐 `ReplacingMergeTree` |
+| [Altinity KB：Exactly once semantics](https://kb.altinity.com/altinity-kb-integrations/altinity-kb-kafka/02-consumption-patterns/altinity-kb-exactly-once-semantics/) | 第二节：Kafka 表引擎默认至少一次 |
+| [Kafka 表引擎](https://clickhouse.com/docs/reference/engines/table-engines/integrations/kafka) | 第二节：offset 存 Keeper 的实验模式 |
+| [eBay Block Aggregator](https://github.com/eBay/block-aggregator)、[Kafka Summit 2021 演讲](https://www.kafka-summit.org/sessions/real-time-data-ingestion-from-kafka-to-clickhouse-with-deterministic-re) | 第二节：按 Kafka 元数据确定性重放，再交给块级去重 |
+| [Snowpipe Streaming 的 channel 与 exactly-once](https://docs.snowflake.com/user-guide/snowpipe-streaming/snowpipe-streaming-channels) | 第二、三节：offset 和数据在目标库一起提交，才是真正的 exactly-once |
+| [Sentry Snuba 架构](https://getsentry.github.io/snuba/architecture/overview.html#ingestion) | 第三节：至少一次加表引擎去重，接受最终一致 |
+| [PostHog 的 ClickHouse 说明](https://posthog.com/docs/how-posthog-works/clickhouse) | 第三节：`ReplicatedReplacingMergeTree`，但去重不是保证 |
+| [OpenMeter：Consistent Kafka consumer](https://openmeter.io/blog/consistent-kafka-consumer) | 第三节：计费场景写入前去重 |
+| [Confluent S3 Sink](https://docs.confluent.io/kafka-connectors/s3-sink/current/overview.html)、[Confluent JDBC Sink](https://docs.confluent.io/kafka-connectors/jdbc/current/sink-connector/overview.html) | 第三节：确定性命名、upsert 幂等 |
 
 **本仓库的实验**（结果在 `results/`）
 
@@ -295,7 +333,9 @@ WHERE path = (SELECT zookeeper_path FROM system.replicas WHERE database = '{db}'
 
 ## 八、附：2026-10-06 的一次性探针
 
-在 lab 上手工跑的，没有进 `experiments/`；实验 24 把它们写成断言。环境：25.3.14.14，`Atomic` 库，三副本，DDL 带 `ON CLUSTER default`（建法同其他实验）。
+在 lab 上手工跑的，留在这里当记录；结论已经写成实验 24（M1）、27（M4）、24 六和 25（M5）的断言，以 `results/` 为准。环境：25.3.14.14，`Atomic` 库，三副本，DDL 带 `ON CLUSTER default`（建法同其他实验）。
+
+注意：探针和早期版本的实验 24 都是在一个副本上写、马上在另一个副本上读，没有先 `SYSTEM SYNC REPLICA`，读到的值偶尔会少一份。现在的实验读之前一律先同步。
 
 **物化视图和源表去重（M1）。** 源表是 `ReplicatedMergeTree`，物化视图写进 `ReplicatedSummingMergeTree`。同一行用同样的设置插两次：
 

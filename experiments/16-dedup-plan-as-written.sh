@@ -224,5 +224,3 @@ for t in st_a st_b st_c st_d; do
   for s in "" _tmp _ref; do q1 "DROP TABLE IF EXISTS $t$s ON CLUSTER default SYNC" >/dev/null; done
 done
 exit $FAILED
-#   - ClickHouse Official Documentation (2025/2026)
-#     https://clickhouse.com/docs/en/

@@ -1,4 +1,4 @@
-# 跑于 2026-10-10 00:35:56 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 6be142c+改动
+# 跑于 2026-10-10 19:16:15 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 94c06b8+改动 | SLOW=1
 
 === 默认值（生产上就是这两个数在起作用） ===
 name	value
@@ -12,18 +12,18 @@ parts_to_throw_insert	3000
 === 一条一行地插，直到服务端拒绝 ===
   · 第 26 条被拒，此时单分区 active part = 25
   报错原文：
-    Code: 252. DB::Exception: Too many parts (25 with average size of 207.00 B) in table 'default.manyparts (b5d155aa-8c9a-4353-a768-c081ea38e181)'. Merges are proc
+    Code: 252. DB::Exception: Too many parts (25 with average size of 207.00 B) in table 'default.manyparts (3f99de3f-db59-44ff-af72-7d9adbc9ce4e)'. Merges are proc
   [符合] 报的是 TOO_MANY_PARTS
   [符合] 被拒时 active part 数已经到 parts_to_throw_insert（1 = 是）：1
 
 === 拖慢发生在报错之前，不是同时 ===
-  · DelayedInserts 计数：0 → 5
+  · DelayedInserts 计数：5 → 10
   [符合] 这一轮里确实有 INSERT 被人为拖慢过（1 = 有）：1
   · 先拖慢再报错：到 20 个 part 开始拖，到 25 个才拒绝。生产上这段拖慢期
   · 就是唯一的预警窗口，等报错了再看就晚了——巡检盯的是 part 数，不是错误率。
 
 === 这段拖慢在耗时上长什么样 ===
-  阈值之前那 8 条 INSERT 的耗时中位数：5 ms
+  阈值之前那 8 条 INSERT 的耗时中位数：6 ms
   最后 8 条（已经在拖慢区）：        308 ms
   · 耗时是环境相关的，只作参照；硬证据是上面那个 DelayedInserts 计数
 
@@ -48,3 +48,4 @@ min_insert_block_size_rows	1048449
   [符合] JSONEachRow 300 万行也是 3 个 part，其中 2 个不少于 min_insert_block_size_rows、1 个装余数（1 = 是）：1
   · 装余数的那个 part 不一定最后提交，所以各 part 的先后顺序每次可能不同
   [符合] 客户端发 3000 行一小批：1 个 part（Kafka Connect 每批每个分区就是这种）：3000
+# 退出码 0

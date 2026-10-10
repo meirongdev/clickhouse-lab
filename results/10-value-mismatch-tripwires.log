@@ -1,4 +1,4 @@
-# 跑于 2026-10-10 00:35:54 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 6be142c+改动
+# 跑于 2026-10-10 19:16:13 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 94c06b8+改动 | SLOW=1
 
 === 服务端时区（下面那两张表的对照基准） ===
 server_tz
@@ -52,3 +52,4 @@ k	v
   · 25.3 源码里这个设置的说明写的是「只对 Join 引擎表生效」，而上面这张右表是普通子查询、走的是 hash join，
   · 照样被它翻转了：以实测为准，不以说明为准。当前版本的文档还提醒 ANY JOIN 在并行 hash join 下可能返回不确定的行。
   · 所以别在文档里写死「ANY JOIN 取第一行」——它连默认值都是可配的。要确定性就自己 LIMIT 1 BY 加排序列。
+# 退出码 0

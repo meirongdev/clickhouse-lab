@@ -281,5 +281,3 @@ note "数据还在 Kafka；errors.tolerance=all 时 task 不停，这一段只�
 
 cleanup
 exit $FAILED
-#   - ClickHouse Official Documentation (2025/2026)
-#     https://clickhouse.com/docs/en/

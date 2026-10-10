@@ -1,4 +1,4 @@
-# 跑于 2026-10-10 00:37:02 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 6be142c+改动
+# 跑于 2026-10-10 19:19:54 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 94c06b8+改动 | SLOW=1
 name	value
 database_atomic_delay_before_drop_table_sec	480
 name	engine
@@ -16,8 +16,8 @@ partition_id	reason
 
 === 二、FREEZE 备份，然后真的误删一个分区（DROP PARTITION），再从备份还原 ===
   · shadow/lab_recovery_probe 下的目录结构（只列到 part 一层）：
-    /var/lib/clickhouse/shadow/lab_recovery_probe/store/b7c/b7cbdfd1-99d6-4b0c-805c-d24e2e0a1318/20260310_2_2_0
-    /var/lib/clickhouse/shadow/lab_recovery_probe/store/b7c/b7cbdfd1-99d6-4b0c-805c-d24e2e0a1318/20260311_0_0_0
+    /var/lib/clickhouse/shadow/lab_recovery_probe/store/571/571743e7-5f62-42f6-a6a4-6e53a7afcc2e/20260310_2_2_0
+    /var/lib/clickhouse/shadow/lab_recovery_probe/store/571/571743e7-5f62-42f6-a6a4-6e53a7afcc2e/20260311_0_0_0
   [符合] shadow/ 里冻住的 part 数（表里有 2 个分区）：2
   [符合] 冻住的文件和原 part 共用 inode（链接数 > 1，1 = 是）：1
   · 冻的是 hardlink 不是拷贝：瞬间完成、当时不占额外空间；原 part 被 merge 掉之后，这份才真正占住磁盘。
@@ -76,5 +76,19 @@ max_table_size_to_drop	50000000000
   · 不用改服务端配置、不用放 force_drop_table 标记文件。超线被拒时先确认删的是想删的东西，再这样放开
 
 === 七、延迟期满之后，后悔药也到期 ===
-  · 这一段默认跳过——等满 480 秒会多加 8 分钟。要验：
-  ·   SLOW=1 bash experiments/13-drop-recovery-window.sh
+  · 每 10 秒同时看 Keeper 里的副本数和 system.dropped_tables 里的条目数，记两者各自归零的时刻
+  t=0s    Keeper 里的副本=1  dropped_tables=1
+  t=60s   Keeper 里的副本=1  dropped_tables=1
+  t=121s  Keeper 里的副本=1  dropped_tables=1
+  t=181s  Keeper 里的副本=1  dropped_tables=1
+  t=242s  Keeper 里的副本=1  dropped_tables=1
+  t=302s  Keeper 里的副本=1  dropped_tables=1
+  t=363s  Keeper 里的副本=1  dropped_tables=1
+  t=423s  Keeper 里的副本=1  dropped_tables=1
+  t=484s  Keeper 里的副本=0  dropped_tables=0
+  · Keeper 副本在 t=484s 消失，dropped_tables 条目在 t=484s 消失（10 秒粒度）
+  [符合] 两者都撑过了延迟期的九成才消失（1 = 是）：1
+  [符合] 两者在同一个 10 秒轮询里消失（1 = 是）：1
+  [符合] 期满之后救不回来了：Code: 60. DB::Exception: Table default.expiry_probe is being dropped, has been dropped, or
+  · Keeper 残留和后悔药是同一个计时器的两面：看到残留副本还在，就说明还来得及 UNDROP
+# 退出码 0

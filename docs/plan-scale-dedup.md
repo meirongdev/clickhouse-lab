@@ -65,7 +65,7 @@ review 文档的假设编号是 H1–H12，这里用 S 开头：
 
 | 阶段 | 每个 ClickHouse 容器的限额 | 宿主机至少 | 盘至少 |
 |---|---|---|---|
-| P1 校准：一千万行，三副本 | A 档 4 vCPU / 16 GB | 现在这台笔记本：10 核 / 32 GB，OrbStack 内存调到 24 GB | 50 GB |
+| P1 校准：一千万行，三副本 | A 档 4 vCPU / 16 GB | 10 核以上、32 GB 的 Mac 就行（10 核的 M5、12 核的 M2 Pro 都够），OrbStack 内存调到 24 GB | 50 GB |
 | P2：两亿行，单副本 | B 档 16 vCPU / 64 GB | 16 核 / 80 GB | 150 GB |
 | P3：三亿多行，单副本 | C 档 8 vCPU / 32 GB | 8 核 / 48 GB | 250 GB |
 | P4：两亿行，三副本 | 3 × B 档 | 48 核 / 224 GB | 400 GB |
@@ -156,7 +156,7 @@ R2 的段长、R3 核对的切法，各跑两种（S2、S4）。R3 默认用单�
 
 库引擎和单副本阶段的几处细节：
 
-- **`DB_ENGINE`**：`replicated`（默认，和生产一致）或 `atomic`（对照组，沿用实验 01–21 的写法）。
+- **`DB_ENGINE`**：`replicated`（默认，和生产一致）或 `atomic`（对照组，沿用实验 01–26 的写法）。
 - **`DB_ENGINE=replicated` 时：**
   - 库用 production-shape 第一节那条 `CREATE DATABASE … ENGINE = Replicated(…)` 建；
   - 之后的建表、删表都不写 `ON CLUSTER`，引擎不带参数；

@@ -1,134 +1,129 @@
-# 引擎平滑升级与亿级数据割接指南 (Engine Migration Runbook)
+# 明细表换引擎：ReplicatedMergeTree → ReplicatedReplacingMergeTree
 
-在日均 3 亿笔交易（300M/day）的生产环境中，ClickHouse 严禁直接使用 `ALTER TABLE` 变更底层核心引擎（如从 `ReplicatedMergeTree` 升级到 `ReplacingMergeTree`）。
+在线换，不丢、不重、能回滚，sink 只停一小会儿。每一步都在实验 27 里跑过：`Replicated` 库，sink 一直在写，中途还有人工补发（lab 实测）。标注约定见 [README.md](README.md#标注约定)。
 
-本指南基于 ClickHouse 的原子重命名特性与 Kafka 的积压缓冲能力，提供了一套**“零停机、零丢数、业务完全透明”**的在线割接方案。
+这是 [dedup-solution.md](dedup-solution.md) 的 M4。换完之后读明细要带 `FINAL` 或者开 `final = 1`，报表怎么跟上见 [report-pipeline.md](report-pipeline.md)。
 
----
+## 适用条件
 
-## ⏱️ 一、 割接时机选择
-**绝对不要在月底或月初割接**。月底是财务结算和报表出账的绝对高峰期，任何系统抖动都会造成公司级的业务恐慌。
-**最佳实践**：选择**月中（如 15 号）的周末低峰期（如周六凌晨 2:00）**。本方案通过“统一透明视图”技术，完美掩盖底层的截断，即使在月中割接，前端报表看到的数据依然是完整连续的。
+- **只换引擎，别的一概不动。** 新表的列、类型、默认值、列序、分区键、排序键、主键、跳数索引、存储策略都和旧表一样。这是 `ATTACH PARTITION … FROM` 和 `REPLACE PARTITION … FROM` 的前提（[文档](https://clickhouse.com/docs/reference/statements/alter/partition#attach-partition-from)，已核）。
+  - 版本列用现有的 `create_time`。要用别的列，先在旧表上 `ADD COLUMN`，再建新表。
+  - 排序键或分区键也要改的话，这份 runbook 不适用：那就得 `INSERT … SELECT` 重写数据，lab 没验过。
+- **`SYSTEM STOP MERGES` 要能用。** 第 4 步的闸靠它。Aiven 上给不给权限待核；不给的话，第 4 步要改成按键逐分区比对，这会扫数据。
+- **对象存储上的分区。** `ATTACH` / `REPLACE` 在本地盘上只挂硬链接（实验 20、27）；分区已经搬到对象存储上的，走不走硬链接没验过（待一手观察）。
 
----
+## 步骤
 
-## 🛠️ 二、 割接实操步骤 (预计影响时间：< 1分钟)
+占位符：`{db}` 库名，`{cluster}` 集群名（`SELECT DISTINCT cluster FROM system.clusters`）。`Replicated` 库里的 DDL 自动传播，不写 `ON CLUSTER`；`SYSTEM` 语句不会传播，要写 `ON CLUSTER`。
 
-### 1. 预备环境：建新表
-在不影响线上业务的情况下，创建带有新引擎的 V2 表。如果旧表没有版本控制字段，请在此刻加上（如 `create_time`）。
-```sql
-CREATE TABLE events_raw_v2 (
-    -- 确保与旧表字段一致，或新增必要的版本控制字段
-    tenant_id String,
-    transaction_id String,
-    amount Decimal(18,4),
-    create_time DateTime DEFAULT now()
-) ENGINE = ReplicatedReplacingMergeTree(create_time)
-ORDER BY (tenant_id, transaction_id);
-```
-
-### 2. 截断写流量：暂停 Kafka Sink (安全缓冲垫)
-在 Confluent Cloud 控制台，将 ClickHouse Sink Connector 状态点击为 **PAUSED**。
-* **业务影响**：Kafka 会将实时涌入的订单暂存在 Topic 中，绝对不会丢失。
-
-### 3. 原子换名：狸猫换太子 (瞬间完成)
-在 ClickHouse 中执行以下原子重命名语句：
-```sql
-RENAME TABLE 
-    events_raw TO events_raw_backup, 
-    events_raw_v2 TO events_raw;
-```
-* **业务影响**：毫秒级完成。旧表变为 `backup`，新引擎表正式接管 `events_raw` 这个名字。
-
-### 4. 业务透明化：建立统一路由视图
-为了让前端报表在割接期间也能同时查到“新表的新数据”和“老表的老数据”，我们将 `events_raw` 改名（隐藏起来），然后对外暴露一个同名的 `VIEW`。
+**0. 建新表，停它的 merge。**
 
 ```sql
--- 1. 先把刚刚接管的新表再改个名，让出 events_raw 的大名给视图
-RENAME TABLE events_raw TO events_raw_main;
-
--- 2. 创建一个同名视图，拼接两张表的数据
-CREATE VIEW events_raw AS
-SELECT * FROM events_raw_main
-UNION ALL
-SELECT * FROM events_raw_backup;
+CREATE TABLE {db}.ev_new (...与 ev 完全相同的列和索引...)
+ENGINE = ReplicatedReplacingMergeTree(create_time)
+PARTITION BY toYYYYMMDD(toDateTime(settle_ms / 1000)) ORDER BY (settle_ms, id, rev) PRIMARY KEY (settle_ms, id);
+SYSTEM STOP MERGES ON CLUSTER {cluster} {db}.ev_new;
 ```
 
-### 5. 恢复写流量：Resume Kafka Sink
-在 Confluent 控制台点击 **RESUME**。
-* **业务影响**：积压在 Kafka 里的几万条数据会瞬间倾泻进 `events_raw_main`（新引擎表）。至此，实时链路切换完毕，业务毫无感知。
+停 merge 有两个原因：ReplacingMergeTree 的合并会折掉重复、改变行数，停了之后第 4 步才能拿行数做闸；新表在切换之前也没人读，合并没有意义。旧表不停：它一直在被 sink 写，停了会堆 part。停 merge 的副作用见第 3 步的排空。
 
----
+**1. 核结构。** 比较两张表的 `system.columns`（position、name、type、default_kind、default_expression）、`system.tables`（partition_key、sorting_key、primary_key、storage_policy）和 `system.data_skipping_indices`，必须逐项相同（实验 27 一）。
 
-## 🚚 三、 历史数据异步搬迁 (愚公移山)
-旧表 (`events_raw_backup`) 中可能存有半年高达 540 亿条的数据。为了不让视图在搬迁期间查出重复数据，我们采用**“搬运完一天 -> 立刻炸掉旧表这一天”**的滚动剥离法。
+**2. 在线搬历史，sink 不停。** 记下时刻 `T1`，然后逐个分区：
 
-在后台服务器启动以下按天搬迁的 Bash 脚本：
-
-```bash
-#!/bin/bash
-# 从最新的一天往前搬，优先让近期数据进入新架构
-for date in '2026-10-14' '2026-10-13' '2026-10-12'; do
-    echo "正在搬迁 $date (约 3 亿条)..."
-    
-    clickhouse-client -q "
-        -- 1. 强行戴上镣铐：只允许用 2 个 CPU 核心，绝不抢占线上资源的 8 核！
-        SET max_threads = 2;
-        
-        -- 2. 插入新表
-        INSERT INTO events_raw_main SELECT * FROM events_raw_backup WHERE date = '$date';
-        
-        -- 3. 插入成功后，立刻将老表中的这一天 DROP 掉（避免视图 UNION 出双份数据）
-        ALTER TABLE events_raw_backup DROP PARTITION '$date';
-    "
-done
+```sql
+ALTER TABLE {db}.ev_new ATTACH PARTITION ID '{p}' FROM {db}.ev;
 ```
-* **效果**：搬运半年数据可能需要在后台跑上十几个小时，但老表越来越空，新表越来越满。视图 `events_raw` 始终对外提供跨越半年的、100% 准确的无重复数据。
 
-### 💡 关于“单日 3 亿大分区”的物理极限推演 (Scale Extrapolation)
-很多人会担心：用 `INSERT SELECT` 搬运单日高达 **3 亿行** 的数据，会不会导致机器 OOM (内存溢出) 或者执行时间过长？
-根据我们在本地执行的 [**实验 27**](../experiments/27-engine-migration-view.sh) 的实测数据推演，ClickHouse 的表现如下：
-* **高度线性的耗时**：实验中 2500 万行数据的回填仅耗时 2 秒。由于列式流处理的线性特征，3 亿行仅为 2500 万行的 12 倍。在 8C32G 的机器上，搬运一天的 3 亿数据大概仅需 **24 秒 ~ 30 秒**。
-* **绝对的内存安全 (No OOM)**：ClickHouse 在执行 `INSERT ... SELECT` 时，是按照 8192 行的 Granule（颗粒）进行**流式读取、流式处理、流式落盘**的。它绝不会尝试将 3 亿行数据全部加载进内存。因此，无论分区是 2500 万行还是 30 亿行，内存占用都保持在一个极低的恒定水位，绝不会发生 OOM。
-* **隔离的 CPU 消耗**：在这 30 秒内，`max_threads=2` 确保了该任务只占用 2 个 CPU 核心，剩余的 6 个核心完美保障线上 3500 笔/秒的 Kafka 实时摄入。
+只挂硬链接，写入 0 行，另外两个副本也是在本地挂（lab 实测，实验 20、27）。分区可以一个一个慢慢搬（生产上有多少个分区待核：这张表没有 TTL）。搬的时候，旧表里当天的分区还在被 sink 写，已经搬过的历史分区也可能被人工补发，这些都留给第 3 步补。
 
----
+**3. 停 sink，排空，补齐。**
 
-## 🚨 四、 异常处理与兜底方案 (Rollback & Fixes)
+- **停 sink：** 在 Confluent Cloud 上暂停 connector。消息留在 Kafka 里，恢复后接着写。
+- **排空：**
+  - 三个副本上都没有 sink 在跑的 INSERT：查 `clusterAllReplicas('{cluster}', system.processes)`，按 sink 的用户和 `query_kind = 'Insert'` 筛（lab 里按语句文本筛）。客户端超时的那条 INSERT 在服务端可能还没结束，还会晚到提交（实验 12、21），所以看服务端。connector 默认同步插入（`async_insert=0`，dedup-solution.md M1），服务端没有攒着没落盘的数据。
+  - 两张表在每个副本上追平，复制队列里除了合并任务没有别的条目：
 
-### 异常 1：切表后，Kafka Sink 报错挂起 (`FAILED`)
-* **根因**：通常是因为 `events_raw_v2` 在建表时漏掉了某个老表的字段，或者类型不匹配，导致 Kafka 写不进去。
-* **一秒回滚方案 (Rollback)**：
-  不要慌，由于没有删除任何老数据，直接再次原子换名换回来即可：
-  ```sql
-  -- 销毁视图
-  DROP TABLE events_raw;
-  -- 把 backup 换回正主
-  RENAME TABLE events_raw_main TO events_raw_v2, events_raw_backup TO events_raw;
-  ```
-  然后在 Kafka 侧重置任务，即可瞬间恢复旧架构。
+    ```sql
+    SYSTEM SYNC REPLICA ON CLUSTER {cluster} {db}.ev LIGHTWEIGHT;
+    SYSTEM SYNC REPLICA ON CLUSTER {cluster} {db}.ev_new LIGHTWEIGHT;
+    SELECT count() FROM clusterAllReplicas('{cluster}', system.replication_queue)
+    WHERE database = '{db}' AND table IN ('ev', 'ev_new') AND type != 'MERGE_PARTS';   -- 必须是 0
+    ```
 
-### 异常 2：报表前端查出了“重复翻倍”的数据
-* **根因**：搬迁脚本在执行 `INSERT` 后，第二句的 `DROP PARTITION` 因为网络抖动等原因没有执行成功。导致这 3 亿数据既在新表，又在旧表，视图 `UNION ALL` 把它们加倍了。
-* **修复方案**：
-  手动或者在脚本里加上重试，重新执行一次 `ALTER TABLE events_raw_backup DROP PARTITION '出错的日期';`，重复数据瞬间消失。
+  - **别等 `queue_size` 归零，也别用不带 `LIGHTWEIGHT` 的 `SYNC REPLICA`。** 新表停着 merge，有可合并的 part 时 leader 照样给它排合并任务，执行不了就一直挂在队列里：`queue_size` 不会归零，默认的 `SYNC REPLICA` 会一直等到 `receive_timeout` 超时（lab 实测，实验 27 八）。
+- **补齐：** `T1` 之后旧表有新 part 的分区，就是要补的分区，逐个用 `REPLACE` 重新同步：
 
-### 异常 3：搬迁脚本导致 ClickHouse 卡顿，业务群报警
-* **根因**：忘记在脚本里加 `SET max_threads = 2`，导致补数任务抢占了 8C32G 节点的所有 CPU。
-* **修复方案**：立刻在终端 `Ctrl + C` 杀掉搬迁脚本。在 ClickHouse 中通过 `KILL QUERY WHERE query LIKE '%INSERT INTO events_raw_main%'` 中止该查询。由于业务查的是视图，中断搬迁不会导致任何数据丢失或错误。修改脚本加上限流参数后，深夜再次启动即可。
+```sql
+SYSTEM FLUSH LOGS ON CLUSTER {cluster};
+SELECT DISTINCT partition_id FROM clusterAllReplicas('{cluster}', system.part_log)
+WHERE database = '{db}' AND table = 'ev' AND event_type IN ('NewPart', 'MutatePart') AND error = 0
+  AND event_time_microseconds >= '{T1}';
+-- 对每个 {p}：
+ALTER TABLE {db}.ev_new REPLACE PARTITION ID '{p}' FROM {db}.ev SETTINGS alter_sync = 2;
+```
 
+实验 27 里查出来的正好是 sink 在写的当天，加上搬完之后被补发的那一天（lab 实测）。`part_log` 生产上只留约 4 天，所以第 2 步和第 3 步之间别隔太久。
 
----
+**4. 闸：每个副本、每个分区，两张表的行数都一样。** 只读 `system.parts`，不扫数据：
 
-## 📚 五、 方案的官方与业界权威支撑
+```sql
+SELECT hostName() AS h, partition_id, sumIf(rows, table = 'ev') AS a, sumIf(rows, table = 'ev_new') AS b
+FROM clusterAllReplicas('{cluster}', system.parts)
+WHERE database = '{db}' AND table IN ('ev', 'ev_new') AND active
+GROUP BY h, partition_id HAVING a != b;   -- 必须是空的
+```
 
-这套“原子切换 + 视图融合 + 异步搬迁”的策略并非经验主义的 Hack 操作，而是 100% 契合 ClickHouse 底层特性的企业级标准做法。以下是其坚实的权威出处：
+**5. 切换，恢复 sink，开 merge。**
 
-1. **ClickHouse 官方 Atomic 引擎特性**：
-   现代 ClickHouse (20.10+) 默认开启 `Atomic` 数据库引擎。官方文档明确承诺，在该引擎下，多张表的重命名（如 `RENAME TABLE A TO B, C TO A`）或 `EXCHANGE TABLES` 是**绝对的原子级元数据操作 (Atomic Metadata Operations)**。这是官方为 DBA 提供“不中断读写替换生产表”的核心底层支撑。
-2. **Altinity "零停机迁移 (Zero-Downtime Migration)" 架构标准**：
-   作为全球最权威的 ClickHouse 商业化支持公司，Altinity 在其千万级乃至 PB 级数据的 Schema 演进最佳实践中，重点推崇了本方案所采用的 **The View/Union Pattern（视图/联合模式）**。原因在于 ClickHouse 对 `UNION ALL` 做了极其强悍的并发执行优化，使得在漫长的历史数据搬迁期，前端报表通过视图并发双读新旧两表时，几乎不产生额外性能损耗。
-3. **官方 Zero-Copy (零拷贝) 挂载特性**：
-   针对历史数据的物理转移，如果新旧两表的列结构和排序键（`ORDER BY`）完全一致，官方操作指南高度推荐使用 `ALTER TABLE ... ATTACH PARTITION ... FROM ...`。该命令通过直接在底层文件系统建立硬链接 (Hardlinks)，能够在几十毫秒内完成单分区数亿数据的“瞬间转移”，完美绕过 8 核心 CPU 的计算瓶颈。
-4. **Confluent (Kafka) 倡导的流批缓冲哲学**：
-   在传统数据库割接中，为了不丢数据，研发通常需要在应用层编写高风险的“双写 (Dual-Write)”代码。本方案借用流式架构的设计，利用 Kafka 原生的安全持久化堆积能力 (Retention) 充当天然的安全垫，把沉重的“业务层改造”降维成了零开发成本的“点击 Pause / Resume 运维操作”。
+```sql
+EXCHANGE TABLES {db}.ev AND {db}.ev_new;
+-- 恢复 connector
+SYSTEM START MERGES ON CLUSTER {cluster} {db}.ev;
+```
+
+- **为什么用 `EXCHANGE`：** 它原子地交换两张表的名字。多表 `RENAME` 官方明说不是原子的（[RENAME](https://clickhouse.com/docs/reference/statements/rename)，已核），中间可能有一刻 `ev` 不存在，sink 就会写失败。
+- **物化视图跟着名字走：** 切换之后，写进新 `ev` 的数据照常触发挂在 `ev` 上的物化视图（lab 实测，实验 27 六）。
+- **停写多久：** 实验 27 里从停 sink 到恢复零点几秒（4 次 0.34–0.50 秒），补了 2 个分区（lab 实测）。生产上主要看第 3 步要补几个分区，每个是一条硬链接的 `REPLACE`。
+- **新表的去重窗口是空的（推断，没测）：** `ATTACH`、`REPLACE` 搬的是 part，旧表记在 Keeper 里的插入去重标记不跟过来。切换前写进旧表的批次，切换后如果被重投（比如 connector 的 task 重启，从上次提交的 offset 重读），新表拦不下，会多一份物理行，`FINAL` 折得掉，报表可能多算。切换那天按 [report-pipeline.md](report-pipeline.md) 第三节对一次账。
+
+**6. 核对。** 实验 27 七验过的（lab 实测）：
+
+- sink 写的每个 offset，在新表里恰好一份；
+- 历史 5 天新表 `FINAL` 的行数，等于旧表里不同键的个数；
+- 搬迁前就有的重复被 `FINAL` 折掉了；
+- 补发的行在；
+- 下游物化视图在切换前后不漏也不多。
+
+**7. 旧表留着，到确认不回滚再删。** 它和新表共用硬链接，在删掉之前，旧 part 占的空间不会释放（实验 20）。删的时候大概率超过 `max_table_size_to_drop`（50 GB），要单条放开（实验 13）。
+
+## 回滚
+
+切换之后发现问题，按同样的思路倒回去（lab 实测，实验 27 九）：
+
+1. 停 sink，记下时刻 `T2`，按第 3 步排空；两张表都 `SYSTEM STOP MERGES`。
+2. 在一个副本上，把新表（现在叫 `ev`）的**每个**分区都 `REPLACE PARTITION … FROM` 回旧表（现在叫 `ev_new`），带 `alter_sync = 2`。不按 `part_log` 挑分区：新表切换之后开了 merge，ReplacingMergeTree 的合并会改变行数，没被写过的分区行数也对不上了。全部同步一遍都是硬链接，代价只是 `REPLACE` 的条数。
+3. 闸。和第 4 步不一样：拿**执行 `REPLACE` 的那个副本**上的新表当基准，和每个副本上的旧表逐分区比行数；另外，`T2` 之后新表不能有新写进来的 part（查法同第 3 步的补齐，`event_type = 'NewPart'`）。
+
+   ```sql
+   -- 在执行 REPLACE 的那个副本上跑：三个副本都要出现，same 都是 1
+   WITH (SELECT arraySort(groupArray((partition_id, c))) FROM
+           (SELECT partition_id, sum(rows) AS c FROM system.parts
+            WHERE database = '{db}' AND table = 'ev' AND active GROUP BY partition_id)) AS ref
+   SELECT h, got = ref AS same FROM
+     (SELECT h, arraySort(groupArray((partition_id, c))) AS got FROM
+        (SELECT hostName() AS h, partition_id, sum(rows) AS c FROM clusterAllReplicas('{cluster}', system.parts)
+         WHERE database = '{db}' AND table = 'ev_new' AND active GROUP BY h, partition_id)
+      GROUP BY h);
+   ```
+
+   第 4 步那种每个副本各比各的，在这里会误报：新表停 merge 那一刻，各副本的合并进度不一定相同，同一个分区里的重复有的副本折掉了、有的没有，行数就不一样（lab 实测，实验 27 九）。
+4. 再 `EXCHANGE` 回去，开 merge，恢复 sink。
+
+实验 27 里回滚之后，切换前后 sink 写的每个 offset 都在、只有一份，补发的行也在。
+
+## 不要这样做
+
+- **不排空就切换。** 已经在跑的 INSERT 绑定的是表本身，不跟着名字走：切换时正在写的那一批会落进旧表，新表里没有（lab 实测，实验 27 八）。
+- **用同名的 `UNION ALL` 视图拼新旧两张表。** sink 恢复之后写的是这个视图，普通视图不能写，直接报 `Code: 48`，connector 会停下（lab 实测，实验 27 八）。如果改成往视图后面用 `INSERT … SELECT` 搬历史，这条 INSERT 不是原子的，搬的过程中视图会读到两份，直到旧表那天被删掉为止（推断）。
+- **用多表 `RENAME` 当原子切换。** 原因见第 5 步。

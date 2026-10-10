@@ -35,7 +35,7 @@ q1 "CREATE TABLE events ON CLUSTER default
 q1 "INSERT INTO events SELECT number AS id, 1, $DAY_MS + number*1000, number*1.5, 1, concat('ext-', toString(number)) FROM numbers($ROWS)"
 q1 "INSERT INTO events SELECT number AS id, 1, $DAY_MS + number*1000, number*1.5, 1, concat('ext-', toString(number)) FROM numbers($DUPS)"
 q1 "SYSTEM SYNC REPLICA events" >/dev/null
-note "多余行占比做成 $DUPS/$((ROWS+DUPS))，对着生产那次的形状（两亿行里多 234 行）"
+note "多余行占比 $DUPS/$((ROWS+DUPS))，零星写重的形状（生产那次是两亿行里多 234 行，占比还要低得多）"
 expect "总行数" "$(q1 "SELECT count() FROM events")" "$((ROWS+DUPS))"
 expect "唯一键数" "$(q1 "SELECT uniqExact(id, version) FROM events")" "$ROWS"
 
@@ -98,5 +98,3 @@ q1 "SELECT hostName() AS host, count() AS rows FROM clusterAllReplicas('default'
 
 for t in events events_dedup_keys events_dedup_tmp; do q1 "DROP TABLE IF EXISTS $t ON CLUSTER default SYNC" >/dev/null; done
 exit $FAILED
-#   - ClickHouse Official Documentation (2025/2026)
-#     https://clickhouse.com/docs/en/

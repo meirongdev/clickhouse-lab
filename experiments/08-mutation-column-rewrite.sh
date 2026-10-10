@@ -111,5 +111,3 @@ q1 "SELECT hostName() AS replica, mutation_id, is_done, parts_to_do
 
 q1 "DROP TABLE IF EXISTS mut ON CLUSTER default SYNC" >/dev/null
 exit $FAILED
-#   - ClickHouse Official Documentation (2025/2026)
-#     https://clickhouse.com/docs/en/

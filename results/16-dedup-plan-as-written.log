@@ -1,4 +1,4 @@
-# 跑于 2026-10-10 00:37:20 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 6be142c+改动
+# 跑于 2026-10-10 19:28:19 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 94c06b8+改动 | SLOW=1
 
 === 一、第 1 步：CREATE TABLE … LIKE ===
   返回：Code: 62. DB::Exception: Syntax error: failed at position 23 (LIKE): LIKE st_a. Expected one of: token sequenc
@@ -50,3 +50,4 @@ ct	memo
   [符合] 直接 cityHash64(…, memo)：这组的哈希数（漏数）：1
   [符合] cityHash64(tuple(…, memo))：这组的哈希数：2
   · 生产那批已核对的重复除 create_time 外逐列相同，这一条不会咬到这次；换别的数据复用这段 SQL 时会
+# 退出码 0

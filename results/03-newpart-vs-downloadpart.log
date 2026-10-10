@@ -1,6 +1,6 @@
-# 跑于 2026-10-10 00:35:15 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 6be142c+改动
+# 跑于 2026-10-10 19:13:14 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 94c06b8+改动 | SLOW=1
 
-=== 开跑时间 2026-10-09 16:35:15（part_log 按这个时间过滤，躲开同名旧表的残留） ===
+=== 开跑时间 2026-10-10 11:13:14（part_log 按这个时间过滤，躲开同名旧表的残留） ===
 
 === 经 ch1 写入一个块 ===
   · 这个块叫 all_0_0_0
@@ -27,3 +27,4 @@ NewPart	3	0	OK
 NewPart	3	389	INSERT_WAS_DEDUPLICATED
   [符合] 被拦下的那次也记了一行 NewPart，error = 389（INSERT_WAS_DEDUPLICATED）：1
   · 所以拿 NewPart 算建块速率要加 error = 0；反过来，数 error = 389 的 NewPart 就知道窗口拦下过多少次重投
+# 退出码 0

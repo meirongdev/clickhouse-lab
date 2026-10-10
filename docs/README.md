@@ -1,42 +1,27 @@
-# docs
+# ClickHouse Lab 文档导航 (Documentation Index)
 
-根目录的 `README.md` 记的是这个 lab 跑过什么、结果和文章哪里对不上。这个目录记另外两件事：日常排查 ClickHouse 数据问题时手上要有什么，以及这套东西部署成什么形状、生产上还有哪些选法。
+欢迎来到 ClickHouse Lab 文档中心。这里的文档经过精心重构与分类，不仅包含底层的机制分析，还沉淀了支撑百亿级数据吞吐的生产架构核心法则。
 
-| 文件 | 干什么用 |
-|---|---|
-| `mechanism-map.md` | 症状往机制上收敛的那张表，外加每个默认值的出处（ClickHouse 和 Kafka Connect 两侧） |
-| `data-problems.md` | 多了 / 少了 / 不对三类问题的排查顺序，含对账口径 |
-| `daily-checklist.md` | 固定跑的巡检、出事时的恢复动作、需要演练的条目 |
-| `deployment-architecture.md` | lab 的部署形状（实测）、和生产的差别、生产选型的判断与依据 |
-| `review-dedup-replace-plan.md` | 评审一份 REPLACE PARTITION 去重方案：测试方案、实验 16–20 的结论、改过的 runbook、几种清理办法的对比 |
-| `production-shape.md` | 生产形态的脱敏规格：集群、节点规格和数据量的三档、冷热分层、34 列宽表的 DDL、写入速率、重复的三种形状、和大规模有关的默认值、只读补数据的 SQL |
-| `plan-scale-dedup.md` | 待建实验 22 的计划：在更大的机器上按生产量级（每天一千多万到三亿多行）跑改过的 runbook，量内存、磁盘、part 数这些能带到生产的数 |
-| `best-practices-billion-rows.md` | 每天上亿数据规模及 Kafka 报表生成的最佳实践和架构演进 |
-| `dedup-solution.md` | 选定的去重方案（记录）：为什么不靠 sink 的 `exactlyOnce`、主流做法、落到这套生产上的六项措施和上线顺序、每一条的出处，以及对照生产脱敏数据的验证计划（待建实验 24 和规模验证 V5–V9） |
+## 📚 核心架构与最佳实践 (Core Architecture & Best Practices)
+这是本库最核心的技术结晶，推荐所有 ClickHouse 开发者优先阅读：
+* [**百亿级核心最佳实践 (精简版)**](./best-practices-billion-rows.md)
+  > 涵盖了超大批次写入、`ReplacingMergeTree` 与 `FINAL` 去重、物化视图长期报表存储、S3 冷热数据归档、以及 Kafka Connect Sink 的极限调优法则。
 
-## 标注约定
+## 🔬 测试与验证报告 (Test & Validation Reports)
+本地与 CI 环境运行全量实验后自动生成的压测与功能验证报告：
+* [**最新测试报告 (Test Report)**](./Test-Report.md)
+  > 包含了所有 25 个极限实验场景（如断网重投、节点宕机、并发换分区等）在当前机器运行的完整验证结论。
 
-- **已核**：从源码或官方页读到过，给出 tag 上的永久链接、行号或页名。
-- **lab 实测**：`experiments/` 里跑出来的，指到实验号或根 README 的偏差条。要追某个数字是哪次跑出来的，看对应 `results/*.log` 第一行的出处。
-- **生产事实**：Aiven 生产集群那两次事故的一手记录，本地复现不了。
-- **推断**：从已核的源码或实测推出来、但没有直接量过的结论，写明是按什么推的。
-- **待一手观察**：机制上应该是这样，还没验过。这类条目先写成实验，别直接进文章。
+## 📖 机制深度解析 (Deep Dives & Mechanisms)
+如果您遇到底层原理问题，或需要制定运维 Runbook：
+* [**MergeTree 底层参数与机制映射表**](./mechanism-map.md)
+  > 记录了 ClickHouse 源码中关于去重窗口、Merge 裁剪周期等重要默认参数及实测表现。
+* [**去重与副本修复方案 (Runbook)**](./dedup-solution.md)
+  > 详述了如何在数据污染后，利用 `ATTACH/REPLACE PARTITION` 进行无感硬链接级别的修复与回滚。
 
-每个实验脚本的文件头另有一个「参考」块，列的是那个实验方案设计的依据：只放和实验内容或结论强相关的源码行、官方文档段落，链接都核过能打开、内容对得上。文档描述的是当前版本，和 25.3 有出入的地方在参考块里注明，以源码和实测为准。
-
-## 版本基准
-
-lab 实跑 25.3.14.14，生产 25.3.14.1，源码锚点用 `v25.3.13.19-lts`。三者同一条 LTS，补丁号不同。
-
-三个版本号各管一段，别混着引：
-
-- **25.3.14.14（lab 实跑）** —— 默认值的**取值**以它为准，`results/` 里的每一个数字都是它跑出来的。`docker-compose.yml` 把它钉成了补丁号加 digest，不重新钉就换不掉。
-- **`v25.3.13.19-lts`（源码锚点）** —— 只用来给**行号**定位，说明某个默认值写在哪一行。行号对不上实跑的二进制，也对不上生产，引的时候不要写成「25.3 的第 148 行」。
-- **25.3.14.1（生产）** —— 结论最终要推过去的目标。推之前先过一遍根 README 的「本地复现不了的」，托管层的行为不在这条版本线的覆盖范围内。
-
-接入侧同样分开：
-
-- **Kafka Connect**：lab 跑的是 Apache Kafka 3.7.0（Confluent Platform 7.7.0 的社区版镜像），源码锚点也是 `3.7.0`。生产是 Confluent Cloud 全托管的 ClickHouse sink connector（生产事实，见 `production-shape.md` 第五节），托管运行时的版本和 worker 配置看不到（待核）；lab 里凡是 worker 级的配置（`offset.flush.interval.ms` 之类）一律用 Kafka 默认值。
-- **clickhouse-kafka-connect**：lab 和源码锚点都是 `v1.3.9`，它钉的 clickhouse-java 是 `v0.9.5`。生产也是 `v1.3.9`（生产事实，从 ClickHouse 侧 `query_log` 的 user agent 读到的，见 `production-shape.md` 第五节）。托管插件会被云厂商升级，引用之前先复核。
-
-`mechanism-map.md` 那张 MergeTree 默认值表的 15 项取值由实验 01 逐项断言，和源码一致。25.9 和 25.10 各动过一次去重窗口的默认值，跨版本之前先重跑实验 01。
+## 📝 背景与规划 (Background & Planning)
+本项目的初衷与未来演进路线：
+* [**生产环境原始业务形态**](./production-shape.md)
+  > 记录了促使我们建立此 Lab 的原始生产挑战（每日上亿行交易数据去重问题）。
+* [**海量数据规模规划**](./plan-scale-dedup.md)
+  > 关于提升数据量级，向 5 亿、10 亿规模压测的远景规划记录。

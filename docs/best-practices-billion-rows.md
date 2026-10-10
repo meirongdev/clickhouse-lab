@@ -57,3 +57,22 @@
 
 **【验证支撑】**
 *   🔗 **外部权威背书**: [ClickHouse 官方文档 - S3 Storage Integration](https://clickhouse.com/docs/en/engines/table-engines/integrations/s3) —— 明确阐述了针对 S3 引擎作为不可变存储对象的读写底层特性，规避无谓的 I/O 放大。
+
+---
+
+### 规则六：Kafka Sink 摄入层极致调优 (Kafka Connect Sink Optimization)
+**【实践内容】**
+在通过 `clickhouse-kafka-connect` 官方插件应对每日几亿吞吐量时，**千万不要依赖插件本身的 Exactly-Once 状态表**。
+具体调优清单如下：
+1. **关闭 Exactly-Once** (`exactlyOnce=false`)：依靠底层 `ReplacingMergeTree` 去重，允许 At-Least-Once 重投，彻底消灭状态表错乱引发的 Task 假死。
+2. **极致攒批**：调大 `consumer.override.max.poll.records` (如 100000)，严防小批量高频插入导致的 `Too many parts` 崩溃。
+3. **开启 DLQ 旁路脏数据**：设置 `errors.tolerance=all` 与 `errors.deadletterqueue.topic.name`，确保偶发的 JSON 损坏不会阻塞整个分区。
+4. **多节点 HA 直连**：配置多个主机名 (`hostname=node1,node2`) 实现负载均衡与高可用防单点宕机。
+5. **放宽超时等待**：在 `clickhouseSettings` 中增加 `socket_timeout` 并调高重试次数。
+
+**【验证支撑】**
+*   🧪 **内部实验验证**: 
+    *   [实验23: 模拟 Worker 强杀](../experiments/23-exactly-once-state-mismatch.sh) —— 证实 `exactlyOnce=true` 会导致 `State MISMATCH`，关闭后自愈。
+    *   [实验11: 小批次并发压测](../experiments/11-too-many-parts.sh) —— 证实未合理攒批会导致 `Too many parts` 故障。
+    *   [实验09: 脏数据旁路测试](../experiments/09-bad-records-dlq.sh) —— 证实 DLQ 机制的有效性。
+*   🔗 **外部权威背书**: [Confluent: Kafka Connect Error Handling](https://www.confluent.io/blog/kafka-connect-deep-dive-error-handling-dead-letter-queues/) (推荐生产环境必上 DLQ) 以及 ClickHouse 官方 Kafka Connect Docs。

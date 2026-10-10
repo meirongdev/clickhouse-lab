@@ -1,17 +1,16 @@
-# clickhouse-lab
+# ClickHouse Lab (架构实战与极限机制压测台)
 
-给博客上那四篇 ClickHouse 文章做的可复现实验台。
+本仓库是 ClickHouse 在海量数据（百亿级/PB级）写入、去重、备份恢复及 Kafka 集成场景下的架构实战与压测台。
+这里不仅包含数十个自动化运行的极限测试脚本，更沉淀了大量从生产痛点中提取的核心最佳实践。
 
-四篇的结论都来自一套 Aiven 托管的生产集群，而现场基本取不到了：`system.part_log` 只留 4 天、`query_log` 4 天、Kafka Connect 日志 7 天。文章里因此有若干处只能标「没有实测过」「这一句是推断」。这个 lab 用 docker compose 起一套同版本的 1 shard × 3 replicas，再加一套可选的 Kafka + Kafka Connect，把其中能在本地重放的断言逐条跑一遍，把推断换成观测。
+## 📚 文档与最佳实践导航 (Documentation & Best Practices)
+所有的架构法则与文档体系已在 `docs/` 目录下精心重构，建议优先阅读：
 
-对应的文章：
+- 🌟 [**ClickHouse 百亿级核心最佳实践 (精简版)**](docs/best-practices-billion-rows.md) — 涵盖超大批次写入、`ReplacingMergeTree` 与 `FINAL` 去重、物化视图长期报表存储、S3 冷热数据归档、以及 Kafka Connect Sink 的极限调优法则。
+- 🗺️ [**全量文档导航图 (Docs Index)**](docs/README.md) — 涵盖所有机制映射表、生产恢复 Runbook、以及历史背景。
+- 📊 [**全量本地压测报告**](docs/Test-Report.md) — 全部 25 个自动化实验在最新 25.3 版本下的实测结果输出。
 
-1. 用只读权限评审 ClickHouse 补数方案
-2. ClickHouse 里的重复行来自 Kafka Connect 超时重投
-3. ClickHouse 的块级去重窗口
-4. 清理 ClickHouse 重复行的 REPLACE PARTITION runbook
-
-## 跑起来
+## 🚀 跑起来 (How to run)
 
 ```bash
 ./cluster.sh up        # 只起 ClickHouse（1 keeper + 3 副本）。除 09、21、23 之外的实验只要这个

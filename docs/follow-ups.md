@@ -51,7 +51,7 @@
 
 SQL 见 [production-shape.md 第八节](production-shape.md#八还缺的生产数据怎么只读地拿) 和 [dedup-solution.md 第六节的 V-c](dedup-solution.md#v-c-生产只读核对不改任何东西)。
 
-- [ ] Aiven 改过的设置（三类 `setting`）。**P2 之前必须拿到**，拿到后抄进 `cfg/scale-settings.xml`。
+- [x] Aiven 改过的设置（三类 `setting`）。已拿到并落地脱敏：见 `cfg/prod/` 与 `docker-compose.prod.yml`，用 `bash prod-check.sh` 核对。
 - [ ] 明细表现在的列和跳数索引、逐列压缩字节、一个沉淀下来的日分区的 part 布局、存储策略和盘余量。
 - [ ] 下游聚合是物化视图还是定时作业；sink 的 INSERT 带没带 `deduplicate_blocks_in_dependent_materialized_views`；去重窗口有没有改过；窗口拦下重投的日均次数。
 - [ ] 服务端时区（`SELECT timezone()`）：报表按天分区要和明细用同一个时区切天。

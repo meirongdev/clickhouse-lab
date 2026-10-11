@@ -19,13 +19,14 @@
 | 服务 | Aiven for ClickHouse，25.3.14.1 | 25.3.14.14，同一条 LTS |
 | 拓扑 | 1 shard × 3 replicas，每个节点存全量 | 同 |
 | 库引擎 | `Replicated`：DDL 自动传播到三个节点，不写 `ON CLUSTER`；建 `MergeTree` 会被改写成 `ReplicatedMergeTree` | 实验 01–26 用 `Atomic`，DDL 带 `ON CLUSTER default` 模拟。lab 也建得出 `Replicated` 库，实验 27 和待建实验 22 用它（见下一小节） |
-| 协调 | 每个节点同机跑一个 ZooKeeper，只在集群内可达 | 单独一个 Keeper 容器 |
+| 协调 | 每个节点同机跑一个 ZooKeeper，只在集群内可达；节点连本机 2181 端口，`keeper_api_version` 是 0，像是 Apache ZooKeeper 而不是 ClickHouse Keeper（推断）。几天之内大多数节点都重连过 Keeper 会话（生产事实，`system.zookeeper_connection` 只给最近一次） | 单独一个 Keeper 容器 |
 | 连接 | 一个 URL，连接随机落到任一节点 | 三个端口，用 `rr` 轮流打 |
 | 存储 | 每个节点一块网络块存储，加一层对象存储（tiered storage） | 只有本地盘 |
 | 备份 | Aiven 做，查询日志里是 `ALTER TABLE … FREEZE`，一次几分钟 | 无 |
-| 观测 | `query_log` / `part_log` 只留约 4 天；`SHOW CREATE TABLE` 被拒，`engine_full` 被抹 | 全开 |
+| 设置 | Aiven 改过一批服务端设置和 `default` profile：删表、删分区没有大小保险，`DROP` 不留宽限期（没有 `UNDROP`），每个节点有并发上限、INSERT 也算在内，`max_threads` 钉在 vCPU 数，盘剩不到 5% 拒绝写入……MergeTree 的默认值一项没改。清单见第七节和 [cfg/prod/README.md](../cfg/prod/README.md) | 上游默认。`TIER=A\|B\|C ./cluster.sh up prod` 能带上生产那一套，`prod-check.sh` 核对 |
+| 观测 | `query_log` / `part_log` 只留约 4 天；`SHOW CREATE TABLE` 被拒，`engine_full` 被抹，`system.zookeeper` 被拒；设置、profile、用户、`system.zookeeper_connection` 能读 | 全开 |
 
-库引擎、协调、连接三行是 Aiven 文档的说法（已核，[Service architecture](https://aiven.io/docs/products/clickhouse/concepts/service-architecture)）。拓扑、备份形式、观测限制是在生产上查到的（生产事实）。
+库引擎、协调、连接三行是 Aiven 文档的说法（已核，[Service architecture](https://aiven.io/docs/products/clickhouse/concepts/service-architecture)）。拓扑、备份形式、设置、观测限制是在生产上查到的（生产事实）。
 
 ### lab 上的 `Replicated` 库
 
@@ -40,16 +41,16 @@ CREATE DATABASE <库名> ON CLUSTER default ENGINE = Replicated('/ch/databases/<
 | 行为 | lab 实测 | 对实验 22 意味着什么 |
 |---|---|---|
 | 表的 Keeper 路径 | 不写引擎参数时，路径取 `default_replica_path`，即 `/clickhouse/tables/{uuid}/{shard}`；副本名取 `{replica}`。生产副本的 `zookeeper_path` 也是 `/clickhouse/tables/<uuid>/<分片名>` 这个形状（生产事实，查过一套部署），说明生产就是这样不带参数建的 | 建表不写参数 |
-| 显式写引擎参数 | 第四节那条带 `ReplicatedMergeTree('/ch/tables/{uuid}/…', '{replica}')` 的 DDL 直接报错：`Code: 80 … Explicit zookeeper_path and replica_name are specified in ReplicatedMergeTree arguments`。原因是 `database_replicated_allow_replicated_engine_arguments` 默认为 0 | DDL 要去掉参数，见第四节 |
+| 显式写引擎参数 | 第四节那条带 `ReplicatedMergeTree('/ch/tables/{uuid}/…', '{replica}')` 的 DDL 直接报错：`Code: 80 … Explicit zookeeper_path and replica_name are specified in ReplicatedMergeTree arguments`。原因是路径里没有 `{shard}` 一类的宏，这道检查和设置无关，带上生产设置照样报（[`DatabaseReplicated.cpp:896-963`](https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Databases/DatabaseReplicated.cpp#L896-L963)，已核）。路径带上 `{shard}` 之后还有第二道：`database_replicated_allow_replicated_engine_arguments` 为 0（上游默认）时报 Code 36；生产把它设成 1（CONST），能建（lab 实测，`prod-check.sh` 四） | DDL 去掉参数，见第四节。和生产现表一样，也省得撞这两道检查 |
 | 建表不写 `ON CLUSTER` | 只在 ch1 上执行，三个节点上都出现，库的复制日志多一条 | 和生产一样 |
 | `CREATE TABLE … AS` | 拿到新的 uuid 路径，不会撞；8 个跳数索引和键在三个副本上都带过去了 | R1 的快照表照常建 |
 | 普通 `MergeTree` | **不会**被改写，结果是三个节点各一张、互不复制的 `MergeTree`。Aiven 文档说生产上会被改写成 `ReplicatedMergeTree`（已核，同上一页），所以这是托管层的行为，不是 ClickHouse 本身的 | lab 里一律显式写 `ReplicatedMergeTree`，否则中间表只有一个节点上有数据 |
 | `ATTACH PARTITION … FROM` / `REPLACE PARTITION` | 不进库的复制日志（前后条数不变），只在发起的节点上执行（`query_log` 里只有 ch1 有这两条），另外两个副本靠表自己的复制拿到数据 | 和 `Atomic` 库一样，实验 17 关于 `alter_sync` 的结论照样成立 |
-| `DROP TABLE` 不带 `SYNC` | 三个节点的 `system.dropped_tables` 里都有，延迟删除和 `Atomic` 库一样 | 实验 07、13 的结论照样成立 |
+| `DROP TABLE` 不带 `SYNC` | 三个节点的 `system.dropped_tables` 里都有，延迟删除和 `Atomic` 库一样 | 上游默认设置下实验 07、13 的结论照样成立。生产把宽限期设成了 0（第七节），表当场删掉、没有 `UNDROP` |
 
 实验 27 在 `Replicated` 库里又断言了几条（lab 实测）：`ATTACH PARTITION … FROM` 只挂硬链接、写入 0 行；`EXCHANGE TABLES` 在三个副本上一起生效；挂在表上的物化视图跟着表名走，换名之后照常触发；切换时正在跑的 INSERT 会落进它开始时的那张表。
 
-还没验的（推断）：`Replicated` 库里的 DDL 默认要等所有副本应答。某个副本停了或者转了只读，建表会一直等到超时才返回，但活着的副本上表已经建好了，这时候重试会撞上「表已存在」。这一条不需要大规模，小规模就能验，见计划的 S12。
+还没验的（推断）：`Replicated` 库里的 DDL 默认要等所有副本应答。某个副本停了或者转了只读，建表会一直等到超时才返回，但活着的副本上表已经建好了，这时候重试会撞上「表已存在」。生产的 `distributed_ddl_output_mode` 是 `null_status_on_timeout`：超时不报 `TIMEOUT_EXCEEDED`，只把没做完的节点状态记成 `NULL`（已核，25.3 自带的设置说明），所以生产上更可能看到的是「等满超时、没报错地返回」。这一条不需要大规模，小规模就能验，见计划的 S12；上游默认和带生产设置各跑一遍。
 
 ## 二、节点规格和数据量
 
@@ -71,14 +72,18 @@ CREATE DATABASE <库名> ON CLUSTER default ENGINE = Replicated('/ch/databases/<
 ## 三、存储：冷热分层
 
 - **怎么落盘、什么时候搬。** 表的 `storage_policy` 是 `tiered`：新 part 落本地盘（网络块存储），本地盘用到 80% 才开始往对象存储搬（已核，[Aiven tiered storage](https://aiven.io/docs/products/clickhouse/concepts/clickhouse-tiered-storage)）。搬的时候按 part 大小从大到小挑（已核，[MergeTree 存储策略](https://clickhouse.com/docs/engines/table-engines/mergetree-family/mergetree) 的 `move_factor`）。
-- **冷热边界不固定。** 这张表没有按时间搬的 TTL（生产事实），所以冷热边界不是固定天数，随盘大小和写入量变。
+- **冷热边界是 45 天。** 这张表有一条搬迁 TTL：`create_time` 满 45 天的 part 搬到对象存储；没有删除 TTL。三档的部署都是这一条，本地和远端的 part 全都带着它（生产事实，读的是 `system.parts` 的 `move_ttl_info`，建表语句看不到）。这一份早先写的「没有按时间搬的 TTL」不对。80% 那条规则还在，只是本地盘现在用到三到六成，轮不到它。
+- **搬的时机按 part 里最新的一行算。** 搬迁 TTL 取的是 part 里 TTL 的最大值（已核，[`MergeTreePartsMover.cpp:155`](https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Storages/MergeTree/MergeTreePartsMover.cpp#L155)、[`MergeTreeDataPartTTLInfo.cpp:301-330`](https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Storages/MergeTree/MergeTreeDataPartTTLInfo.cpp#L301-L330) 的 `use_max`）。旧分区收到迟到写入、合并之后，这个 part 会在本地多留 45 天（推断）。
 - **大部分数据已经在对象存储上。** B 档约三分之二，C 档近九成（生产事实）。所以要去重的那一天在本地还是在对象存储，得现查 `system.parts.disk_name`，不能假设。
 - **远端文件有本地缓存。** Aiven 默认开着（已核，同上一页）。
 
 对去重的影响（推断；lab 没挂对象存储，没验过）：
 
 - 去重要把一整天读一遍。那一天如果在对象存储上，就得从远端读回来。
-- 去重后的新分区先落本地盘，等于把这一天从冷层搬回热层。本地盘如果已经接近 80%，会触发把**别的**大 part 搬走。
+- 去重后的新分区落在哪，看 `create_time` 有没有过 45 天。runbook 的 `INSERT … SELECT` 照抄 `create_time`，新 part 的 TTL 和原来一样：
+  - 45 天以内的一天（事故一般几天内就发现）：新分区落本地盘，到期再搬；
+  - 已经过了 45 天的一天：写入时 TTL 就已经到期，但要不要直接写到目的地，看的是**目的卷**的 `perform_ttl_move_on_insert`（已核，[`MergeTreeData.cpp:6938-6975`](https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Storages/MergeTree/MergeTreeData.cpp#L6938-L6975)、[`:7028-7041`](https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Storages/MergeTree/MergeTreeData.cpp#L7028-L7041)）。生产上对象存储那个卷的这个开关是 0（生产事实），所以新 part 先落本地盘，再由后台搬迁搬走（推断：到期的 part 下一轮就搬）。本地盘要先容得下这一天。
+- 本地盘如果已经接近 80%，新分区落本地会触发把**别的**大 part 搬走。
 - R1 的快照表在换分区之后还引用着旧 part（lab 实测，实验 20），`DROP` 掉快照表之前这部分空间不释放。
 
 ## 四、表
@@ -136,6 +141,9 @@ PARTITION BY toYYYYMMDD(toDateTime(settle_ms / 1000))
 ORDER BY (settle_ms, id, rev)
 PRIMARY KEY (settle_ms, id)
 SETTINGS index_granularity = 8192;
+-- 生产上另有这两样，lab 没有对象存储，P6 挂 MinIO 时再加（第三节）：
+--   TTL create_time + INTERVAL 45 DAY TO VOLUME 'remote'   -- 写的是卷还是盘看不到，tiered 策略里卷和盘都叫 remote
+--   SETTINGS storage_policy = 'tiered'
 ```
 
 - **库引擎。** 上面是 `Atomic` 库的写法，实验 01–26 都按这个约定写。实验 22 在 `Replicated` 库里建表，要改两处：
@@ -143,7 +151,7 @@ SETTINGS index_granularity = 8192;
   - 引擎写成不带参数的 `ENGINE = ReplicatedMergeTree`。
 
   改过的 DDL 和 `CREATE TABLE … AS` 都在 lab 的 `Replicated` 库里建过：三个副本上各有 8 个索引，键和上面一致（lab 实测，同第一节那一小节）。
-- **键**是在生产 `system.tables` 里查到的（生产事实）：按结算日分区，排序键以结算时间开头，没有 TTL。生产上还有 `storage_policy = 'tiered'`，lab 没有这个策略，实验 22 的 P6 阶段挂 MinIO 时才加。
+- **键**是在生产 `system.tables` 里查到的（生产事实）：按结算日分区，排序键以结算时间开头，没有删除 TTL。生产上还有 `storage_policy = 'tiered'` 和一条 45 天的搬迁 TTL（第三节），lab 没有这个策略，实验 22 的 P6 阶段挂 MinIO 时才加。
 - **列和跳数索引**来自一份旧的建表语句。那份语句的排序键是旧的，还带一个 3 个月的 TTL，跟现在的表对不上，所以列和索引后来有没有变还要核（待核，见第八节）。
 - **索引一个都不能少。** REPLACE PARTITION 要求临时表和原表的结构、键、存储策略一致，并且包含原表的全部索引（已核，[ALTER … PARTITION](https://clickhouse.com/docs/sql-reference/statements/alter/partition#replace-partition)）。`CREATE TABLE … AS` 会把索引一起带过去，所以造数据时 8 个跳数索引都得建上。bloom_filter 还会加重写入和 merge 的负担。
 - **列序要照抄。** `INSERT … SELECT` 按位置对列（review 文档 H3），lab 里列序抄错，实验结论就推不到生产。
@@ -196,35 +204,39 @@ SETTINGS index_granularity = 8192;
 
 三种重复都是除 `create_time` 外整行相同。不管是哪一种，REPLACE PARTITION 都要把**一整天**重写一遍，代价跟分区大小走，跟重复了多少行无关（推断）。
 
-## 七、和大规模有关的默认值
+## 七、和大规模有关的默认值与生产实测对照
 
-下表是 25.3 的默认值（lab 实测，在 lab 集群的 `system.settings` / `system.merge_tree_settings` / `system.server_settings` 里读的）。Aiven 有没有改过，都没核过（待核，第八节的 SQL 能查）：
+下表是 25.3 的默认值（lab 实测，在 lab 集群的 `system.settings` / `system.merge_tree_settings` / `system.server_settings` 里读的），以及生产（Aiven 25.3）的实际配置对照（生产事实，见 `cfg/prod/` 与 `prod-check.sh`）：
 
-| 设置 | 25.3 默认 | 为什么和大规模有关 |
-|---|---|---|
-| `alter_sync` | 1 | `REPLACE PARTITION` 只等当前副本，其他副本稍后执行（实验 17） |
-| `max_bytes_ratio_before_external_group_by` / `_sort` | 0.5 | 用到一半可用内存就落盘，所以大 `GROUP BY` 预期是变慢，而不是报内存超限 |
-| `max_server_memory_usage_to_ram_ratio` | 0.9 | 服务端内存上限 = 节点内存 × 0.9 |
-| `max_table_size_to_drop` / `max_partition_size_to_drop` | 50 GB（`50000000000`） | C 档的快照表、临时表单副本就有约 50 GB，R8 的 `DROP` 可能被拒，要单条放开（实验 13） |
-| `min_insert_block_size_rows` / `_bytes` | 1048449 行 / 268402944 字节（约 256 MiB） | `INSERT … SELECT` 攒满任一个就落一个 part。窄表实测每 1111953 行一个；宽表每行在内存里约 400 字节，大概率先碰到字节上限，估计每六七十万行一个，三亿行大约四五百个（推断） |
-| `parts_to_delay_insert` / `parts_to_throw_insert` | 1000 / 3000（按单个分区算） | 上一行的四五百个 part 还没到阈值，但停了 merge 或者连续写几批就要留意 |
-| `max_bytes_to_merge_at_max_space_in_pool` | 150 GiB | 比一天的分区大，所以一天的数据理论上能合成很少几个 part；生产上实际几个要查（第八节） |
-| `old_parts_lifetime` | 480 秒 | merge 掉的旧 part 要过这么久才删文件，这段时间里盘上新旧两份都在。换分区换下来的 part 不等它，下一轮清理就删（[源码](https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Storages/MergeTree/MergeTreeData.cpp#L4655-L4662)；实验 20 换完分区，旧文件的链接数当场就是 1）；但快照表还用硬链接引用着它们，要等快照表 `DROP` 掉才真正腾出空间 |
-| `replicated_deduplication_window` | 1000 个块 | 第五节的去重窗口 |
+| 设置 | 25.3 默认 | 生产实际（Aiven） | 为什么和大规模有关 |
+|---|---|---|---|
+| `alter_sync` | 1 | 1（未改动） | `REPLACE PARTITION` 只等当前副本，其他副本稍后执行（实验 17） |
+| `max_bytes_ratio_before_external_group_by` / `_sort` | 0.5 | 0.5（未改动） | 用到一半可用内存就落盘，所以大 `GROUP BY` 预期是变慢，而不是报内存超限 |
+| `max_server_memory_usage_to_ram_ratio` | 0.9 | 0.62–0.67（按档位显式钉死） | 生产在服务端直接按内存的 62%–67% 钉死 `max_server_memory_usage`（见 `cfg/prod/server-<档>.xml`） |
+| `max_table_size_to_drop` / `max_partition_size_to_drop` | 50 GB（`50000000000`） | **0（无保护限制）** | 生产已把 DROP 大小限制放开为 0（见 `cfg/prod/server.xml`），删表/分区不会报 Code 359 |
+| `database_atomic_delay_before_drop_table_sec` | 480 秒 | **0（无宽限期）** | 生产无 DROP 宽限期，`system.dropped_tables` 查不到，**无 UNDROP 保护**（见 `prod-check.sh` 第三节） |
+| `min_insert_block_size_rows` / `_bytes` | 1048449 行 / 268402944 字节（约 256 MiB） | 默认（未改动） | `INSERT … SELECT` 攒满任一个就落一个 part。窄表实测每 1111953 行一个；宽表每行在内存里约 400 字节，大概率先碰到字节上限，估计每六七十万行一个，三亿行大约四五百个（推断） |
+| `parts_to_delay_insert` / `parts_to_throw_insert` | 1000 / 3000（按单个分区算） | 默认（未改动） | 上一行的四五百个 part 还没到阈值，但停了 merge 或者连续写几批就要留意 |
+| `max_bytes_to_merge_at_max_space_in_pool` | 150 GiB | 默认（未改动） | 比一天的分区大，所以一天的数据理论上能合成很少几个 part；生产上实际几个要查（第八节） |
+| `old_parts_lifetime` | 480 秒 | 默认（未改动） | merge 掉的旧 part 要过这么久才删文件，这段时间里盘上新旧两份都在。换分区换下来的 part 不等它，下一轮清理就删（[源码](https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Storages/MergeTree/MergeTreeData.cpp#L4655-L4662)；实验 20 换完分区，旧文件的链接数当场就是 1）；但快照表还用硬链接引用着它们，要等快照表 `DROP` 掉才真正腾出空间 |
+| `replicated_deduplication_window` | 1000 个块 | 1000 个块（未改动） | 第五节的去重窗口 |
+| `max_concurrent_queries_for_all_users` | 0（不限） | **100 / 375 / 200（CONST 锁定）** | 生产各档位在 profile 级锁定并发上限，超出直接报 Code 202（`TOO_MANY_SIMULTANEOUS_QUERIES`） |
+| `database_replicated_allow_replicated_engine_arguments` | 0 | **1（CONST 锁定）** | 允许 Replicated 库显式带 `{shard}`/`{replica}` 宏建表（见 `prod-check.sh` 第四节） |
 
 ## 八、还缺的生产数据，怎么只读地拿
 
-截至写这份时，下面这些一项都还没从生产拉过。它们挡的是不同的阶段（阶段编号见[计划](plan-scale-dedup.md#五步骤)）：
+生产改过的三类 `setting` **已经拿到并脱敏落地**（见 `cfg/prod/` 与 `prod-check.sh`，可由 `./cluster.sh up prod` 加载）。
+截至写这份时，下面这些业务与存储层数据还未从生产拉过。它们挡的是不同的阶段（阶段编号见[计划](plan-scale-dedup.md#五步骤)）：
 
-| 缺的 | 对应 SQL 里的哪几段 | 挡哪一步 |
-|---|---|---|
-| Aiven 改过的设置 | 三类 `setting` | **P2 之前必须拿到。** 第七节那些默认值决定内存上限、什么时候落盘、`DROP` 的限额、part 数的阈值。生产改过哪一项，lab 就照着改哪一项，否则量出来的数推不到生产 |
-| 现表的列和跳数索引 | `column`、`skip_index` | P1 之前最好拿到。第四节的 DDL 来自一份旧语句，有出入就要先改 DDL，不然校准白做 |
-| 逐列压缩字节 | `part_column` | P1 的校准。没有它就只能对齐整行的 120–150 字节 |
-| 沉淀后的日分区形状 | `part` | P1 末尾对比 part 数和大小 |
-| 存储策略和盘余量 | `policy`、`disk` | P6，以及执行前估算盘够不够 |
+| 缺的 | 对应 SQL 里的哪几段 | 挡哪一步 | 状态 |
+|---|---|---|---|
+| Aiven 改过的设置 | 三类 `setting` | P2 之前必须拿到 | **已就绪**：见 `cfg/prod/`，已通过 `prod-check.sh` 验证 |
+| 现表的列和跳数索引 | `column`、`skip_index` | P1 之前最好拿到。第四节的 DDL 来自一份旧语句，有出入就要先改 DDL，不然校准白做 | 待拉 |
+| 逐列压缩字节 | `part_column` | P1 的校准。没有它就只能对齐整行的 120–150 字节 | 待拉 |
+| 沉淀后的日分区形状 | `part` | P1 末尾对比 part 数和大小 | 待拉 |
+| 存储策略和盘余量 | `policy`、`disk` | P6，以及执行前估算盘够不够 | 待拉 |
 
-所以 P1 可以先跑，只对齐整行的目标；P2 之前一定要补上 setting 那几行。
+所以 P1 可以先跑，只对齐整行的目标；设置层已就绪，不再阻塞后续规模演练。
 
 下面这条只查 `system.*`，不读表数据，在生产上跑的代价很小。拿到结果先填进私有仓库的对照表，脱敏后再回填这一份（只写量级）。占位符：`{db}`、`{table}`，以及 `{D}`（一个已经沉淀下来的日分区 ID）。
 

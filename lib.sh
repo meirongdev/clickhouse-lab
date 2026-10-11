@@ -113,17 +113,35 @@ machine() {
 # rev 后面带「+改动」表示跑的时候脚本或配置有未提交的修改：这时 rev 指的那一版不是实际跑的那一版。
 # SLOW=1 表示带上了默认跳过的慢速段（实验 02、12、13 各多等几分钟）；没有这一项的 log 里就没有那几段的证据。
 provenance() {
-  local ver img rev root dirty slow=""
+  local ver img rev root dirty slow="" tier prod=""
   root=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
   ver=$(q1 "SELECT version()" 2>/dev/null | tr -d '\n')
   img=$(docker inspect -f '{{.Config.Image}}' "$CH1_CONTAINER" 2>/dev/null) || img=未知
   rev=$(git -C "$root" rev-parse --short HEAD 2>/dev/null) || rev=未提交
-  dirty=$(git -C "$root" status --porcelain -- experiments lib.sh lib-kafka.sh cfg \
-            docker-compose.yml docker-compose-kafka.yml cluster.sh run-all.sh 2>/dev/null)
+  dirty=$(git -C "$root" status --porcelain -- experiments lib.sh lib-kafka.sh cfg docker-compose.yml \
+            docker-compose-kafka.yml docker-compose.prod.yml cluster.sh run-all.sh prod-check.sh 2>/dev/null)
   [ -n "$dirty" ] && rev="${rev}+改动"
   [ "${SLOW:-0}" = "1" ] && slow=" | SLOW=1"
-  printf '# 跑于 %s | 服务端 %s | 镜像 %s | lab %s | 机器 %s%s\n' \
-    "$(date '+%F %T %z')" "${ver:-未知}" "${img:-未知}" "${rev:-未提交}" "$(machine)" "$slow"
+  # 集群带着 cfg/prod 的生产设置（./cluster.sh up prod）时才多这一项；没有这一项的 log 跑的是上游默认设置
+  tier=$(prod_tier)
+  [ -n "$tier" ] && prod=" | 生产设置 档 $tier"
+  printf '# 跑于 %s | 服务端 %s | 镜像 %s | lab %s | 机器 %s%s%s\n' \
+    "$(date '+%F %T %z')" "${ver:-未知}" "${img:-未知}" "${rev:-未提交}" "$(machine)" "$slow" "$prod"
+}
+
+# xml_val <名字> <文件>  从 cfg/ 下一行一项的 XML 里取 <名字>值</名字> 的值
+xml_val() { LC_ALL=C sed -n "s:^[[:space:]]*<$1>\([^<]*\)</$1>.*:\1:p" "$2" | head -1; }   # 文件里有中文注释，按字节跑
+
+# prod_tier  ch1 带的是哪一档生产设置（cfg/prod/server-<档>.xml），没带就输出空。
+# 按 max_concurrent_queries 认：上游默认是 0，三档各不相同。
+prod_tier() {
+  local root got t
+  root=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  got=$(q1 "SELECT value FROM system.server_settings WHERE name = 'max_concurrent_queries'" 2>/dev/null)
+  for t in A B C; do
+    if [ "$got" = "$(xml_val max_concurrent_queries "$root/cfg/prod/server-$t.xml")" ]; then echo "$t"; return 0; fi
+  done
+  return 0
 }
 
 # text_log_since <时间> <logger 名里的片段> <message LIKE 模式>  读服务端自己的 trace 日志。

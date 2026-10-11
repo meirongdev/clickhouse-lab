@@ -1,0 +1,30 @@
+<!--
+  生产（Aiven for ClickHouse 25.3）服务端改过的设置里，和节点规格无关的那部分。随规格变的在 server-<档>.xml。
+  只收上游 25.3.14.14 也有的设置；Aiven 自己加的几项和跟它的账号、路径绑定的几项不收，清单见 README.md。
+  由 docker-compose.prod.yml 挂到 config.d/，./cluster.sh up prod 时才生效。
+-->
+<clickhouse>
+    <!-- 删表、删分区：没有大小保险（上游 50 GB），DROP 不留宽限期（上游 480 秒），所以没有 UNDROP -->
+    <max_table_size_to_drop>0</max_table_size_to_drop>
+    <max_partition_size_to_drop>0</max_partition_size_to_drop>
+    <database_atomic_delay_before_drop_table_sec>0</database_atomic_delay_before_drop_table_sec>
+
+    <!-- 连接：HTTP 空闲连接 10 秒就关（上游 30） -->
+    <keep_alive_timeout>10</keep_alive_timeout>
+    <max_connections>4000</max_connections>
+
+    <!-- 库的个数：200 个告警，400 个报错（上游 1000 告警、不报错） -->
+    <max_database_num_to_warn>200</max_database_num_to_warn>
+    <max_database_num_to_throw>400</max_database_num_to_throw>
+
+    <!-- 内存记账 -->
+    <cgroups_memory_usage_observer_wait_time>0</cgroups_memory_usage_observer_wait_time>
+    <memory_worker_correct_memory_tracker>1</memory_worker_correct_memory_tracker>
+
+    <!-- 其他 -->
+    <background_pool_size>16</background_pool_size>                  <!-- 和上游默认相同，生产上是显式写的 -->
+    <disable_internal_dns_cache>1</disable_internal_dns_cache>
+    <display_secrets_in_show_and_select>1</display_secrets_in_show_and_select>
+    <prepare_system_log_tables_on_startup>1</prepare_system_log_tables_on_startup>
+    <show_addresses_in_stack_traces>0</show_addresses_in_stack_traces>
+</clickhouse>

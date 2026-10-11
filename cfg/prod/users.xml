@@ -1,0 +1,66 @@
+<!--
+  生产（Aiven）的 default profile 里和节点规格无关的那部分：设置值和约束。随规格变的在 users-<档>.xml。
+  生产上 sink 写入用的账号、管理员账号都没有单挂设置，走的就是这个 profile。
+  lab 的 default 用户也用 default profile，所以挂上之后，实验脚本和 Kafka Connect 拿到的就是生产那一套。
+  Aiven 自己加的 allow_non_default_profile（值 0、CONST）上游没有，写进来服务端起不来，不收。
+-->
+<clickhouse>
+    <profiles>
+        <default>
+            <readonly>0</readonly>
+            <max_insert_threads>2</max_insert_threads>
+            <min_free_disk_ratio_to_perform_insert>0.05</min_free_disk_ratio_to_perform_insert>
+            <database_replicated_allow_replicated_engine_arguments>1</database_replicated_allow_replicated_engine_arguments>
+            <distributed_ddl_entry_format_version>7</distributed_ddl_entry_format_version>
+            <distributed_ddl_output_mode>null_status_on_timeout</distributed_ddl_output_mode>
+            <http_write_exception_in_output_format>0</http_write_exception_in_output_format>
+            <cancel_http_readonly_queries_on_client_close>1</cancel_http_readonly_queries_on_client_close>
+            <max_http_get_redirects>10</max_http_get_redirects>
+            <output_format_json_quote_64bit_integers>1</output_format_json_quote_64bit_integers>
+            <stream_like_engine_allow_direct_select>1</stream_like_engine_allow_direct_select>
+            <allow_introspection_functions>0</allow_introspection_functions>
+            <allow_deprecated_snowflake_conversion_functions>0</allow_deprecated_snowflake_conversion_functions>
+            <allow_deprecated_error_prone_window_functions>0</allow_deprecated_error_prone_window_functions>
+            <allow_experimental_kafka_offsets_storage_in_keeper>0</allow_experimental_kafka_offsets_storage_in_keeper>
+            <allow_experimental_vector_similarity_index>0</allow_experimental_vector_similarity_index>
+            <memory_profiler_sample_probability>0</memory_profiler_sample_probability>
+            <postgresql_connection_attempt_timeout>10</postgresql_connection_attempt_timeout>
+            <push_external_roles_in_interserver_queries>0</push_external_roles_in_interserver_queries>
+            <format_display_secrets_in_show_and_select>0</format_display_secrets_in_show_and_select>
+            <max_autoincrement_series>1000</max_autoincrement_series>
+
+            <!-- 约束：CONST 的用户改不了（连 SETTINGS 子句里也不行），min/max 是允许的范围 -->
+            <constraints>
+                <max_concurrent_queries_for_all_users><const/></max_concurrent_queries_for_all_users>
+                <min_free_disk_ratio_to_perform_insert><const/></min_free_disk_ratio_to_perform_insert>
+                <database_replicated_allow_replicated_engine_arguments><const/></database_replicated_allow_replicated_engine_arguments>
+                <distributed_ddl_entry_format_version><const/></distributed_ddl_entry_format_version>
+                <query_cache_max_size_in_bytes><const/></query_cache_max_size_in_bytes>
+                <http_response_headers><const/></http_response_headers>
+                <push_external_roles_in_interserver_queries><const/></push_external_roles_in_interserver_queries>
+                <max_autoincrement_series><const/></max_autoincrement_series>
+                <memory_profiler_sample_probability><const/></memory_profiler_sample_probability>
+                <allow_deprecated_snowflake_conversion_functions><const/></allow_deprecated_snowflake_conversion_functions>
+                <allow_deprecated_error_prone_window_functions><const/></allow_deprecated_error_prone_window_functions>
+                <allow_experimental_kafka_offsets_storage_in_keeper><const/></allow_experimental_kafka_offsets_storage_in_keeper>
+                <allow_experimental_vector_similarity_index><const/></allow_experimental_vector_similarity_index>
+                <allow_experimental_time_series_table><const/></allow_experimental_time_series_table>
+                <allow_get_client_http_header><const/></allow_get_client_http_header>
+                <validate_experimental_and_suspicious_types_inside_nested_types><const/></validate_experimental_and_suspicious_types_inside_nested_types>
+                <query_profiler_real_time_period_ns><min>1000000</min></query_profiler_real_time_period_ns>
+                <query_profiler_cpu_time_period_ns><min>1000000</min></query_profiler_cpu_time_period_ns>
+                <memory_profiler_step><min>100000</min></memory_profiler_step>
+                <!-- merge_tree_ 前缀约束的是建表时 SETTINGS 里的 MergeTree 设置 -->
+                <merge_tree_max_parts_in_total><min>100</min><max>50000</max></merge_tree_max_parts_in_total>
+                <merge_tree_disk><const/></merge_tree_disk>
+                <merge_tree_allow_remote_fs_zero_copy_replication><const/></merge_tree_allow_remote_fs_zero_copy_replication>
+                <merge_tree_disable_freeze_partition_for_zero_copy_replication><const/></merge_tree_disable_freeze_partition_for_zero_copy_replication>
+                <merge_tree_disable_detach_partition_for_zero_copy_replication><const/></merge_tree_disable_detach_partition_for_zero_copy_replication>
+                <merge_tree_disable_fetch_partition_for_zero_copy_replication><const/></merge_tree_disable_fetch_partition_for_zero_copy_replication>
+                <merge_tree_always_use_copy_instead_of_hardlinks><const/></merge_tree_always_use_copy_instead_of_hardlinks>
+                <merge_tree_enable_max_bytes_limit_for_min_age_to_force_merge><const/></merge_tree_enable_max_bytes_limit_for_min_age_to_force_merge>
+                <merge_tree_allow_experimental_reverse_key><const/></merge_tree_allow_experimental_reverse_key>
+            </constraints>
+        </default>
+    </profiles>
+</clickhouse>

@@ -13,13 +13,14 @@
 | 目标形态：节点规格、DDL、写入、重复的形状、默认值 | 就绪，见 [production-shape.md](production-shape.md) |
 | 要回答的问题、机器、造数据、步骤、要记什么 | 就绪，见本文第二到第六节 |
 | 库引擎 | 定了：用 `Replicated` 库，和生产一致。lab 上验过能建，行为见 [production-shape.md 第一节](production-shape.md#lab-上的-replicated-库) |
+| 生产设置与约束 | **就绪**：Aiven 改过的服务端设置与 profile 约束已落入 `cfg/prod/`，见 `cluster.sh up prod` 与 `prod-check.sh` |
 | 脚本 | 没写，清单见第八节 |
-| 生产的校准数据 | 没拉。P1 可以先跑；**P2 之前必须拿到 Aiven 改过的设置**，见 [production-shape.md 第八节](production-shape.md#八还缺的生产数据怎么只读地拿) |
+| 生产的校准数据 | 结构与物理指标待拉（列压缩字节、真实 part 分布等），见 [production-shape.md 第八节](production-shape.md#八还缺的生产数据怎么只读地拿) |
 | 机器 | 大部分阶段放在 128 GB 的 Mac Studio 上，哪些放得下见 [follow-ups.md](follow-ups.md#一在-mac-studio128-gb上做的规模验证)；B 档三副本（P4、P5）要云主机。规格见第三节 |
 
 拿到大机器之后的顺序：
 
-1. 补齐生产的校准数据，至少拿到 setting 那几行。
+1. 生产设置已在 `cfg/prod/` 就绪；可按需补齐生产表结构的逐列压缩字节校准数据。
 2. 写第八节的脚本，先在笔记本上用 P1 的一千万行跑通。
 3. 到大机器上从 P0 开始跑。
 
@@ -152,8 +153,8 @@ R2 的段长、R3 核对的切法，各跑两种（S2、S4）。R3 默认用单�
 | `lib-scale.sh` | 宽表 DDL、可复现的生成器、三种重复的注入、按 `log_comment` 取指标并写 `.tsv` |
 | `experiments/22-scale-dedup-rehearsal.sh` | opt-in，不进 `run-all` 的默认流程（同实验 13 的 `SLOW=1`）。环境变量：`ROWS`（默认一千万）、`REPLICAS`（1 或 3）、`NODE_CLASS`（`none` / `4x16` / `8x32` / `16x64`）、`DUPS`（`retry` / `redelivery` / `replay` / `all`）、`KEEP=1`（跑完不删数据） |
 | `docker-compose.scale.yml` | 给 ClickHouse 容器加 `cpus` 和 `mem_limit`；数据目录挂到 `SCALE_DATA_DIR`（放在大盘上，别放在仓库里）；可选 MinIO 和 tiered 存储策略 |
-| `cluster.sh up scale` | 带上这个 override 起集群；`REPLICAS=1` 时只起 Keeper 和 ch1 |
-| `cfg/scale-settings.xml` | 生产上 Aiven 改过的设置（production-shape 第八节的三类 `setting` 行），拿到之后照抄进来，由 `docker-compose.scale.yml` 挂进去。拿到之前这个文件为空，结果的出处行要写明「未带生产设置」 |
+| `cluster.sh up scale` | 带上这个 override 起集群；`REPLICAS=1` 时只起 Keeper 和 ch1（可与 `prod` 组合叠加生产设置） |
+| `cfg/prod/` 与 `docker-compose.prod.yml` | **已就绪**。生产服务端设置与 default profile 约束（A/B/C 三档），由 `./cluster.sh up prod` 加载，`prod-check.sh` 验证 |
 
 库引擎和单副本阶段的几处细节：
 

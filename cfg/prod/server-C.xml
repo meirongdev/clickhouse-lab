@@ -1,0 +1,14 @@
+<!-- 档 C：每节点 8 vCPU / 32 GB。生产上 Aiven 按这个规格生成的服务端设置。 -->
+<clickhouse>
+    <max_server_memory_usage>23104218726</max_server_memory_usage>          <!-- 约内存的 67% -->
+    <mark_cache_size>2310421872</mark_cache_size>                            <!-- 三个缓存各是内存上限的 10% -->
+    <index_mark_cache_size>2310421872</index_mark_cache_size>
+    <uncompressed_cache_size>2310421872</uncompressed_cache_size>
+    <max_concurrent_queries>247</max_concurrent_queries>
+    <background_schedule_pool_size>32</background_schedule_pool_size>
+    <iceberg_catalog_threadpool_pool_size>17</iceberg_catalog_threadpool_pool_size>
+    <load_marks_threadpool_pool_size>17</load_marks_threadpool_pool_size>
+    <max_prefixes_deserialization_thread_pool_size>17</max_prefixes_deserialization_thread_pool_size>
+    <prefetch_threadpool_pool_size>17</prefetch_threadpool_pool_size>
+    <threadpool_writer_pool_size>17</threadpool_writer_pool_size>
+</clickhouse>

@@ -30,6 +30,8 @@
 ```bash
 ./cluster.sh up        # 只起 ClickHouse（1 keeper + 3 副本）。除 09、21、23 之外的实验只要这个
 ./cluster.sh up all    # 再加 Kafka 栈（ZooKeeper + Kafka + Kafka Connect），实验 09、21、23 要用
+./cluster.sh up prod   # 加挂 cfg/prod/ 的生产设置与约束（默认 A 档，可用 TIER=A|B|C 选档位）
+bash prod-check.sh     # 验证当前生产设置与 profile 约束在三副本上生效，并跑行为探针
 ./run-all.sh           # 起全套，按顺序跑完全部实验，输出存进 results/，再生成 docs/Test-Report.md 的汇总表
 SLOW=1 ./run-all.sh    # 连默认跳过的慢速段一起跑（实验 02、12、13 多等约 15 分钟）；整套约 45 分钟
 ./report.sh            # 只从 results/ 重新生成汇总表，不碰集群
@@ -85,14 +87,17 @@ bash experiments/02-dedup-window-overflow.sh
 ## 文件
 
 ```
-cluster.sh                 起停集群：up / up all / down / status
+cluster.sh                 起停集群：up / up all / up prod / down / status
+prod-check.sh              生产设置核对与行为探针（配合 ./cluster.sh up prod 使用）
 run-all.sh                 跑全部实验并存 results/，最后调 report.sh
 report.sh                  从 results/ 生成 docs/Test-Report.md 里的汇总表
 lib.sh                     共用函数：q / on_all / rr / expect / wait_znodes / provenance / text_log_since
 lib-kafka.sh               实验 09、21、23 用的 Kafka / Connect 函数
 docker-compose.yml         ClickHouse 那套
 docker-compose-kafka.yml   Kafka 栈
+docker-compose.prod.yml    生产设置挂载（./cluster.sh up prod 叠加）
 cfg/                       keeper、cluster、三个节点的 macros、KeeperMap 路径前缀
+cfg/prod/                  生产服务端设置与 default profile 约束（A/B/C 三档，脱敏）
 connect-plugins/           up all 时下载的 connector 插件（.gitignore 里，不进 git）
 experiments/               25 个实验脚本（15、22 还没建），文件头写了它验的是哪条断言、怎么设计的、参考了什么
 results/                   实跑输出，每份 log 第一行是出处

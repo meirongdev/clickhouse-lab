@@ -1,0 +1,13 @@
+<!-- 档 C：每节点 8 vCPU / 32 GB。生产 default profile 里随规格变的几项：并行度钉在 vCPU 数，并发上限按规格给。 -->
+<clickhouse>
+    <profiles>
+        <default>
+            <max_threads>8</max_threads>
+            <max_concurrent_queries_for_all_users>200</max_concurrent_queries_for_all_users>   <!-- 整个服务的并发到这个数，新查询（含 INSERT）就被拒；CONST，见 users.xml -->
+            <constraints>
+                <max_threads><min>1</min><max>8</max></max_threads>
+                <max_insert_threads><min>1</min><max>8</max></max_insert_threads>
+            </constraints>
+        </default>
+    </profiles>
+</clickhouse>

@@ -56,15 +56,15 @@ CREATE DATABASE <库名> ON CLUSTER default ENGINE = Replicated('/ch/databases/<
 
 同一套业务按 region 分成几套独立部署，单日数据量差一个多数量级，节点规格也不同。大规模实验按下面三档对齐：
 
-| 档 | 每个节点 | 本地盘 | 单日分区 | 每个副本上一天落盘 |
-|---|---|---|---|---|
-| A | 4 vCPU / 16 GB | 两百 GB 级 | 一千多万行 | ≈ 1.5 GB |
-| B | 16 vCPU / 64 GB | 5 TB 级 | 约两亿行 | ≈ 30 GiB |
-| C | 8 vCPU / 32 GB | 5 TB 级 | 三亿多行 | ≈ 50 GB |
+| 档 | Aiven 套餐 | 每个节点 | 本地盘 | 单日分区 | 每个副本上一天落盘 |
+|---|---|---|---|---|---|
+| A | business-16 | 4 vCPU / 16 GB | 两百 GB 级 | 一千多万行 | ≈ 1.5 GB |
+| B | business-32 | 8 vCPU / 32 GB | 5 TB 级 | 约两亿行 | ≈ 30 GiB |
+| C | business-64 | 16 vCPU / 64 GB | 5 TB 级 | 三亿多行 | ≈ 50 GB |
 
-- **C 是最紧的一档。** 单日数据量最大，内存却只有 B 的一半。
+- **B 是最紧的一档。** 两亿行配 8 vCPU / 32 GB，每个核、每 GB 内存要摊的行数都是三档里最多的；C 一天三亿多行，节点是 B 的两倍。
 - 根 README 里那句「单个日分区两亿行、30 GiB，每秒建 124 个块」，说的是 B 档那个 region 的一天。
-- 节点规格是 Aiven 套餐的标称值（已核，套餐信息导出）。
+- 节点规格是这三个套餐在 AWS 区域的标称值，三个套餐都是 1 个分片、3 个节点（已核，Aiven 公开的套餐数据 [`api.aiven.io/v1/service_types`](https://api.aiven.io/v1/service_types)）。同一个套餐换到别的云上，核数和内存可能不一样。这一份早先把 B、C 两档的规格写反了。
 - 单日行数来自生产 `part_log` 的写入速率和分区统计（生产事实）。
 - 每个副本一天落多少盘：B 档的 30 GiB 是那个 region 一个日分区在生产上的实际大小（生产事实）；A、C 两档是拿行数乘第四节的每行字节数算的（推断）。
 - 另有一套部署也是 4 vCPU / 16 GB，CPU 峰值经常顶到 100%，单日量没核过（待核）。
@@ -220,7 +220,7 @@ SETTINGS index_granularity = 8192;
 | `max_bytes_to_merge_at_max_space_in_pool` | 150 GiB | 默认（未改动） | 比一天的分区大，所以一天的数据理论上能合成很少几个 part；生产上实际几个要查（第八节） |
 | `old_parts_lifetime` | 480 秒 | 默认（未改动） | merge 掉的旧 part 要过这么久才删文件，这段时间里盘上新旧两份都在。换分区换下来的 part 不等它，下一轮清理就删（[源码](https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Storages/MergeTree/MergeTreeData.cpp#L4655-L4662)；实验 20 换完分区，旧文件的链接数当场就是 1）；但快照表还用硬链接引用着它们，要等快照表 `DROP` 掉才真正腾出空间 |
 | `replicated_deduplication_window` | 1000 个块 | 1000 个块（未改动） | 第五节的去重窗口 |
-| `max_concurrent_queries_for_all_users` | 0（不限） | **100 / 375 / 200（CONST 锁定）** | 生产各档位在 profile 级锁定并发上限，超出直接报 Code 202（`TOO_MANY_SIMULTANEOUS_QUERIES`） |
+| `max_concurrent_queries_for_all_users` | 0（不限） | **100 / 200 / 375（A / B / C 档，CONST 锁定）** | 生产各档位在 profile 级锁定并发上限，超出直接报 Code 202（`TOO_MANY_SIMULTANEOUS_QUERIES`） |
 | `database_replicated_allow_replicated_engine_arguments` | 0 | **1（CONST 锁定）** | 允许 Replicated 库显式带 `{shard}`/`{replica}` 宏建表（见 `prod-check.sh` 第四节） |
 
 ## 八、还缺的生产数据，怎么只读地拿

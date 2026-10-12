@@ -10,14 +10,14 @@
 |---|---|---|
 | `server.xml` | 通用服务端设置 | DROP 保护归零、连接与数据库上限、内存观测机制等 |
 | `server-A.xml` | 档 A 服务端设置 | 4 vCPU / 16 GB：内存上限 10.6 GB、各缓存 1 GB、并发上限 147、后台线程池等 |
-| `server-B.xml` | 档 B 服务端设置 | 16 vCPU / 64 GB：内存上限 46.3 GB、各缓存 4.6 GB、并发上限 422、后台线程池等 |
-| `server-C.xml` | 档 C 服务端设置 | 8 vCPU / 32 GB：内存上限 23.1 GB、各缓存 2.3 GB、并发上限 247、后台线程池等 |
+| `server-B.xml` | 档 B 服务端设置 | 8 vCPU / 32 GB：内存上限 23.1 GB、各缓存 2.3 GB、并发上限 247、后台线程池等 |
+| `server-C.xml` | 档 C 服务端设置 | 16 vCPU / 64 GB：内存上限 46.3 GB、各缓存 4.6 GB、并发上限 422、后台线程池等 |
 | `users.xml` | 通用 profile 设置与约束 | 写入线程约束、只读/DDL 策略、各种实验特性的 const 锁死 |
 | `users-A.xml` | 档 A profile 设置与约束 | `max_threads=4`，`max_concurrent_queries_for_all_users=100`（const） |
-| `users-B.xml` | 档 B profile 设置与约束 | `max_threads=16`，`max_concurrent_queries_for_all_users=375`（const） |
-| `users-C.xml` | 档 C profile 设置与约束 | `max_threads=8`，`max_concurrent_queries_for_all_users=200`（const） |
+| `users-B.xml` | 档 B profile 设置与约束 | `max_threads=8`，`max_concurrent_queries_for_all_users=200`（const） |
+| `users-C.xml` | 档 C profile 设置与约束 | `max_threads=16`，`max_concurrent_queries_for_all_users=375`（const） |
 
-档位 A、B、C 对应 [docs/production-shape.md](../docs/production-shape.md#二节点规格和数据量) 的三档规格。
+档位 A、B、C 对应 [docs/production-shape.md](../docs/production-shape.md#二节点规格和数据量) 的三档规格，也就是 Aiven 的 business-16、business-32、business-64。
 
 ## 二、与上游开源默认值的关键差异
 

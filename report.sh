@@ -35,6 +35,7 @@ title() {
     25) echo "报表漂移、带闸重算、时区上卷" ;;
     26) echo "大查询限 max_threads 的效果与代价" ;;
     27) echo "引擎迁移：ATTACH + EXCHANGE，在线、可回滚" ;;
+    28) echo "ZooKeeper 顺序节点计数器到顶，复制表写不进去" ;;
     *)  echo "（report.sh 里没登记）" ;;
   esac
 }

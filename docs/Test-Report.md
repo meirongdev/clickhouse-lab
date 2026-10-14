@@ -5,7 +5,7 @@
 - **怎么生成的。** `SLOW=1 ./run-all.sh` 按顺序跑完 `experiments/` 下的全部实验，每个实验的完整输出存进 `results/<实验>.log`，然后 `./report.sh` 从这些日志生成最后那张汇总表。表里每一行都能在 `results/` 里找到原始输出，汇总表不手改。
 - **出处行。** 每份日志第一行是出处：跑的时间、服务端版本、镜像 digest、lab 的 git rev、机器，以及有没有带 `SLOW=1`；最后一行是退出码。rev 后面带「+改动」，说明跑的时候脚本或配置有没提交的修改。汇总表上方那一行就是从这里合起来的。
 - **`[符合]` 的意思。** 观测和脚本里写死的期望一致。期望写的是实测到的行为，不一定是「某篇文章的说法成立」，两者的区别见根 README 的「实验设计」。
-- **环境。** ClickHouse 25.3.14.14（生产是 25.3.14.1，同一条 LTS），1 个 Keeper 加 1 shard × 3 replicas；Kafka 3.7.0（Confluent Platform 7.7.0 社区版镜像），clickhouse-kafka-connect v1.3.9，和生产同版。全部跑在一台 Apple M2 Pro（12 核 / 32 GiB）上的 OrbStack 虚拟机里，12 CPU / 16 GiB。每份日志的出处行记着机器；耗时、用了几个核这类数字只在同一台机器的日志之间能比。
+- **环境。** ClickHouse 25.3.14.14（生产是 25.3.14.1，同一条 LTS），1 个 Keeper 加 1 shard × 3 replicas；Kafka 3.7.0（Confluent Platform 7.7.0 社区版镜像），clickhouse-kafka-connect v1.3.9，和生产同版；实验 28 另加一个 Apache ZooKeeper 3.8.4，挂成 auxiliary ZooKeeper。实验 01–27 跑在一台 Apple M2 Pro（12 核 / 32 GiB）上的 OrbStack 虚拟机里，12 CPU / 16 GiB；实验 28 跑在 Apple M5（10 核 / 32 GiB）上，Docker 10 CPU。每份日志的出处行记着机器；耗时、用了几个核这类数字只在同一台机器的日志之间能比。
 
 ## 业务场景对照
 
@@ -21,6 +21,7 @@
 | 重算和大查询不拖慢写入 | `max_threads = N` 就不超过 N 个核；报表重算本来只用 2 个核左右，限到 2 代价小；不限线程的重算会推高同节点小批写入的 p95（只记录、不断言，5 次运行方向一致） | 26 | [report-pipeline.md](report-pipeline.md) 第五节 |
 | 明细表在线换引擎 | `ATTACH` 搬历史、停写补齐、行数闸、`EXCHANGE` 切换：sink 的数据不丢不重，物化视图跟着名字走，可以回滚，回滚的闸要拿执行 `REPLACE` 的副本当基准。停了 merge 的表复制队列可能不归零，排空要用 `SYNC REPLICA … LIGHTWEIGHT` | 27 | [engine-migration-runbook.md](engine-migration-runbook.md) |
 | 误删、Keeper 故障、part 太多 | 误删各场景能救回什么；Keeper 停掉和冻住的区别；part 数先拖慢后拒绝 | 07、11、12、13 | [daily-checklist.md](daily-checklist.md) |
+| 复制日志序号到顶（Apache ZooKeeper） | 每次 INSERT（每个分区一个 part）和每次 merge 各占一个序号，`async_insert` 能把 20 次合成 1 个；到 2147483647 之后 INSERT 全报 `Node exists`、merge 报 `KEEPER_EXCEPTION`，读照常，换副本、重启副本都没用；zkCli 的 `cversion` 过半就是负数，要看 `log_max_index`；新表 + `ATTACH PARTITION FROM` + `EXCHANGE TABLES` 能恢复 | 28 | [daily-checklist.md](daily-checklist.md) |
 | 25.3 的默认值 | 去重窗口和 15 项 MergeTree 默认值逐项和源码一致 | 01 | [mechanism-map.md](mechanism-map.md) |
 
 ## 这些实验推不出的
@@ -40,7 +41,7 @@
 
 <!-- results:begin（这一段由 ./report.sh 从 results/ 生成，别手改） -->
 
-出处：2026-10-11 00:23:41 到 2026-10-11 00:56:51 跑的；lab `d5a651e`；SLOW=1；机器 Apple M2 Pro（12 核 / 32 GiB），Docker 12 CPU / 15.7 GiB。
+出处：2026-10-11 00:23:41 到 2026-10-14 21:58:36 跑的；lab `d5a651e`（实验 01、02、03、04、05、06、07、08、09、10、11、12、13、14、16、17、18、19、20、21、23、24、25、26、27）；`576fccb+改动`（实验 28）；SLOW=1（实验 01、02、03、04、05、06、07、08、09、10、11、12、13、14、16、17、18、19、20、21、23、24、25、26、27）；没带 SLOW=1（实验 28）；机器 Apple M2 Pro（12 核 / 32 GiB），Docker 12 CPU / 15.7 GiB（实验 01、02、03、04、05、06、07、08、09、10、11、12、13、14、16、17、18、19、20、21、23、24、25、26、27）；Apple M5（10 核 / 32 GiB），Docker 10 CPU / 15.7 GiB（实验 28）。
 
 | # | 验的是什么 | 符合 | 不符 | 退出码 |
 |---|---|---|---|---|
@@ -69,8 +70,9 @@
 | 25 | 报表漂移、带闸重算、时区上卷 | 26 | 0 | 0 |
 | 26 | 大查询限 max_threads 的效果与代价 | 10 | 0 | 0 |
 | 27 | 引擎迁移：ATTACH + EXCHANGE，在线、可回滚 | 28 | 0 | 0 |
+| 28 | ZooKeeper 顺序节点计数器到顶，复制表写不进去 | 27 | 0 | 0 |
 
-25 个实验，25 个退出码为 0 且没有不符；断言合计 404 条符合、0 条不符。
+26 个实验，26 个退出码为 0 且没有不符；断言合计 431 条符合、0 条不符。
 出处取自每份日志的第一行，退出码取自最后一行（run-all.sh 写的，「没记」说明不是它跑的或者跑到一半断了）。耗时、用了几个核这类数字只在同一台机器的日志之间能比。
 
 <!-- results:end -->

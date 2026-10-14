@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 带上生产设置（TIER=A|B|C ./cluster.sh up prod）之后，逐项核对 lab 的设置和行为是不是和生产一致。
-# 不放进 experiments/、不进 run-all：实验 01–27 和 results/ 都跑在上游默认设置上。档位从服务端读，不用再传 TIER。
+# 不放进 experiments/、不进 run-all：实验 01–28 和 results/ 都跑在上游默认设置上。档位从服务端读，不用再传 TIER。
 #
 #   一、cfg/prod/ 里当前档位的每一项服务端设置、default profile 设置，在三个副本上都生效了；
 #   二、约束：生产锁死的几项在查询的 SETTINGS 里也改不了；max_threads、max_insert_threads 超过档位核数被拒；

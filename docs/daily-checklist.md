@@ -11,6 +11,7 @@
 | 单分区 active part 数 | `system.parts` 按 `(database, table, partition)` 数 `active = 1` | 到 `parts_to_delay_insert`（1000）的一半 | 合批降频，或者回头看分区键是不是基数太大。注意平均 part 超过 1 GiB 的分区不受这道闸管（`max_avg_part_size_for_too_many_parts`） |
 | 未完成 mutation | `system.mutations` 里 `NOT is_done` 的条数与最老一条的存活时间 | 500 开始拖慢，1000 报错 | 先读 `latest_fail_msg`；再确认磁盘余量能同时装下重写前后的两份分区，装不下它会一直卡着 |
 | 复制队列与延迟 | `system.replicas` 的 `queue_size`、`absolute_delay` | 相对基线持续非零 | 查 Keeper 延迟与网络，暂停大的后台任务；期间别做换分区这类写操作 |
+| 复制日志的序号用了多少 | `system.replicas` 的 `log_max_index` 离 2147483647 还差多少；隔一天再查一次，按涨幅推还剩几天。别看 zkCli 里 `log` 节点的 `cversion`，那是「计数器 × 2 − 子节点数」，用过一半就是负数 | 用掉一半就排期 | 每次 INSERT（每个分区一个 part）和每次 merge 各占一个序号，先降写入次数（合批、`async_insert`）。到顶之后这张表的 INSERT 和 merge 全部失败、读照常，只能换一份新的 Keeper 元数据：新表 + `ATTACH PARTITION FROM` + `EXCHANGE TABLES`（实验 28）。协调服务是 Apache ZooKeeper 时才验过 |
 | 插入耗时尾部 | 客户端侧 connector 指标，服务端 `query_log` 的 INSERT 分位 | 逼近 30 秒超时线的八成 | 把超时线挪开之前，先确认下游有没有幂等层，否则下一次抖动就是写重复。超时之后服务端可能晚到提交（实验 12），`query_log` 里那条还可能没有结束记录（实验 21） |
 | Keeper 在途请求 | `clickhouse_metrics_zoo_keeper_request` | 生产基线是 5 到 15（生产事实） | 涨到几百倍就是停摆前兆，去看复制队列和插入尾部，别等只读告警 |
 | 去重窗口拦下的重投 | `system.part_log` 里 `event_type = 'NewPart' AND error = 389` 的条数 | 相对基线突增 | 有重投在发生、而且这一次被窗口拦住了。拦不住的那一次不会留在这里，要回到「多了」那条排查顺序 |
@@ -33,6 +34,16 @@ LIMIT 20;
 ```
 
 ```sql
+-- 复制日志的序号离 int32 上限多远。log_max_index 来自 Keeper，三个副本的值一样，取 max 即可
+SELECT database, table, max(log_max_index) AS max_log_index,
+       round(100 * max_log_index / 2147483647, 1) AS pct_of_int32
+FROM clusterAllReplicas('default', system.replicas)
+GROUP BY database, table
+ORDER BY max_log_index DESC
+LIMIT 10;
+```
+
+```sql
 SELECT database, table, mutation_id, command, is_done, latest_fail_msg
 FROM clusterAllReplicas('default', system.mutations)
 WHERE NOT is_done
@@ -51,6 +62,17 @@ LIMIT 20;
 
   三个坑：副本名**不做宏替换**，写成 `'{replica}'` 不报错也不生效，是静默空跑（lab 实测，实验 07）；`DROP TABLE` 没加 `SYNC` 时补一条 `DROP TABLE IF EXISTS … SYNC` 同样是空跑，别指望它救场（偏差 E）；残留副本还在，说明表还在延迟删除期里、还能 `UNDROP`，这时候先清残留再 `UNDROP`，表回来是只读的，要再 `SYSTEM RESTORE REPLICA`（lab 实测，实验 13 五）。不清它，`database_atomic_delay_before_drop_table_sec`（默认 480 秒）期满时它自己消失（lab 实测，实验 13 的 `SLOW=1` 那一段）。
 - **换分区 runbook 挂在中途。** runbook 开头用 `DROP TABLE IF EXISTS … SYNC`，重跑从重建临时表开始。临时表复用上次没写完的内容是最难查的一类错。
+- **复制日志的序号到顶了。** 症状是这张表的 INSERT 全报 `Code: 244 … Node exists, path …/log/log-`、merge 报 `KEEPER_EXCEPTION`，副本不是只读、读照常；换副本写、`SYSTEM RESTART REPLICA` 都没用（lab 实测，实验 28）。计数器在 Keeper 里那张表的 `log` 节点上，删日志不退，只能换一份新的 Keeper 元数据。实验 28 走通的做法，骨架和 [engine-migration-runbook.md](engine-migration-runbook.md) 一样：
+
+  ```sql
+  CREATE TABLE t_new ON CLUSTER default …;   -- 结构完全相同；路径带 {uuid}，新表自然是新路径、log 从 0 开始
+  ALTER TABLE t_new ATTACH PARTITION ID '<分区>' FROM t;   -- 每个分区一条
+  SYSTEM SYNC REPLICA t_new;                 -- 三个副本各跑一次，然后按副本核行数
+  EXCHANGE TABLES t AND t_new ON CLUSTER default;
+  -- 新的 t 写入恢复之后，t_new（现在是坏表）DROP … SYNC，它在 Keeper 里的路径一起删掉
+  ```
+
+  和换引擎那份的差别：坏表已经写不进去，不用停 sink、不用补齐，但这段时间 sink 那边是一直报错重试还是 task 停了，要另看接入侧（推断）；坏表的 merge 也停了，part 数可能已经堆高，挂过去之后新表会开始合并。新表的去重窗口是空的，切换后有重投会多一份（同 runbook 第 5 步，推断）。实验 28 是 `Atomic` 库、协调服务是 Apache ZooKeeper；生产的 `Replicated` 库里 DDL 不写 `ON CLUSTER`、`SYSTEM` 语句要写，这条路径没验过（待一手观察）。
 - **写重之后要清理。** 用 [review-dedup-replace-plan.md](review-dedup-replace-plan.md#改过的-runbook) 里那份改过的 runbook（R0–R8，实验 19 整套跑过），别用早期那四条前置校验。几道关键的闸：R0 三个副本当天行数相等、全副本复制队列为空；R1 先用 `ATTACH PARTITION … FROM` 做快照、从快照建去重后的分区；R4 换分区前一刻**三个副本**的当天行数都等于快照、全副本队列为空——只数执行节点会放行一笔还没复制过来的写入（实验 19 第 3b 段）；R6 事后查 `part_log` 里快照到换分区之间 `error = 0` 的 `NewPart`；`PARTITION ID` 带单引号；两张表的 `zookeeper_path` 不同。
 - **前置校验里 Keeper 路径那条的作用变了。** 实验 04 否掉了「克隆出来的表会和原表静默共用复制元数据」：路径写死成字面量时当场报 `REPLICA_ALREADY_EXISTS`，带 `{uuid}` 时各拿各的。这条检查的价值是在建表之前就知道会撞，不是防静默损坏（偏差 B）。
 - **超大小阈值的 drop 被服务端拒绝。** 那是一道保护，报错不是故障（`Code: 359`）。25.3 上 `max_table_size_to_drop` / `max_partition_size_to_drop` 既是服务端设置、也是查询级设置，默认值都是 **50000000000 字节（50 GB，约 46.6 GiB）**（lab 实测，实验 13 六）：

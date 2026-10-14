@@ -9,12 +9,17 @@ NODES=("$CH1" "$CH2" "$CH3")
 NODE_NAMES=(ch1 ch2 ch3)
 # 下面这些实验绕过 HTTP 直接摸容器，只能在 docker 宿主机上跑：
 #   08、13、20 进容器看文件（hardlink 链接数、inode、shadow/ 目录），12 停 / 冻 Keeper 容器，
-#   09、21、23 操作 Kafka 栈的容器。容器名必须和 CH1/CH2/CH3 指的是同一组节点，否则量的是别的机器。
+#   09、21、23 操作 Kafka 栈的容器，28 停 ZooKeeper 容器、跑改快照的工具容器。
+#   容器名必须和 CH1/CH2/CH3 指的是同一组节点，否则量的是别的机器。
 CH1_CONTAINER=${CH1_CONTAINER:-ch1}
 CH2_CONTAINER=${CH2_CONTAINER:-ch2}
 CH3_CONTAINER=${CH3_CONTAINER:-ch3}
 NODE_CONTAINERS=("$CH1_CONTAINER" "$CH2_CONTAINER" "$CH3_CONTAINER")
 KEEPER_CONTAINER=${KEEPER_CONTAINER:-ch-keeper}
+# 实验 28 用的 Apache ZooKeeper（docker-compose-zk.yml，./cluster.sh up zk 才有），在 ClickHouse 里的名字
+# 是 cfg/aux_zookeeper.xml 定的 apache_zk。实验 28 要停它、改它的快照，同样只能在 docker 宿主机上跑。
+ZK_CONTAINER=${ZK_CONTAINER:-ch-zk}
+ZK_AUX=apache_zk
 
 # q <节点URL> <SQL>  在指定节点上执行，原样打印服务端返回。
 # 约定：服务端报错（HTTP 500）时报错正文照样从 stdout 出来，curl 退出码仍是 0。
@@ -152,6 +157,45 @@ text_log_since() {
   q1 "SELECT event_time_microseconds, message FROM system.text_log
       WHERE event_time_microseconds >= '$1' AND logger_name LIKE '%$2%' AND message LIKE '$3'
       ORDER BY event_time_microseconds FORMAT TSV"
+}
+
+# provenance_zk  实验 28 接在 provenance 后面的第二行：ZooKeeper 的版本和镜像。
+# 实验 28 验的是 ZooKeeper 自己的计数器行为，换了 ZooKeeper 版本 log 就不能和旧的比。
+provenance_zk() {
+  local v img
+  v=$(docker exec "$ZK_CONTAINER" bash -c 'exec 3<>/dev/tcp/localhost/2181 && printf srvr >&3 && timeout 2 cat <&3' 2>/dev/null \
+        | sed -n 's/^Zookeeper version: \([^,]*\).*/\1/p')
+  img=$(docker inspect -f '{{.Config.Image}}' "$ZK_CONTAINER" 2>/dev/null) || img=未知
+  printf '# ZooKeeper %s | 镜像 %s\n' "${v:-未知}" "${img:-未知}"
+}
+
+# zk_ready  三个副本的容器里都连得上 zk:2181，并且 ZooKeeper 回 imok。
+# 25.3 的 system.zookeeper 不认 zookeeperName（只能查默认的那个 Keeper），auxiliary ZooKeeper 的连接
+# 也是第一次被表用到时才建，所以就绪只能从网络上判断；表能不能用，实验 28 建表时自然就验了。
+zk_ready() {
+  local c r
+  for c in "${NODE_CONTAINERS[@]}"; do
+    r=$(docker exec "$c" bash -c 'exec 3<>/dev/tcp/zk/2181 && printf ruok >&3 && timeout 2 cat <&3' 2>/dev/null)
+    [ "$r" = imok ] || return 1
+  done
+}
+
+# zk_stat <路径> <字段>  在 ZooKeeper 容器里用 zkCli 读某个 znode 的 stat 字段（cversion、numChildren …）。
+# 节点不存在时输出空。读的是 ZooKeeper 自己的数据，不经过 ClickHouse。
+zk_stat() {
+  docker exec "$ZK_CONTAINER" zkCli.sh -server localhost:2181 stat "$1" 2>/dev/null | sed -n "s/^$2 = //p" | tr -d '\r'
+}
+
+# zk_ls <路径>  子节点名，一行一个；节点不存在时输出空
+zk_ls() {
+  docker exec "$ZK_CONTAINER" zkCli.sh -server localhost:2181 ls "$1" 2>/dev/null | grep '^\[' | tr -d '[]\r' | tr ',' '\n' | sed 's/^ *//' | grep -v '^$'
+}
+
+require_zk() {
+  if ! zk_ready; then
+    echo "副本连不上 auxiliary ZooKeeper（${ZK_AUX}，zk:2181）。先跑 ./cluster.sh up zk（实验 28 要用）" >&2
+    exit 1
+  fi
 }
 
 require_cluster() {

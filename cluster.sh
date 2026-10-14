@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# 集群生命周期：./cluster.sh up [all] [prod] | down | status
-#   up       只起 ClickHouse（1 keeper + 3 副本）。除 09、21、23 之外的实验都只要这个。
+# 集群生命周期：./cluster.sh up [all] [prod] [zk] | down | status
+#   up       只起 ClickHouse（1 keeper + 3 副本）。除 09、21、23、28 之外的实验都只要这个。
 #   up all   再加 Kafka 栈（ZooKeeper + Kafka + Kafka Connect），实验 09、21、23 要用。
 #            第一次会下载 clickhouse-kafka-connect 插件并校验 sha256，插件不进 git。
 #   up prod  再挂上 cfg/prod/ 的生产设置（Aiven 改过的服务端设置和 default profile），档位 TIER=A|B|C，默认 A。
-#            可以和 all 一起写。实验 01–27 和 results/ 都跑在上游默认设置上，别带 prod 跑 run-all；
+#            可以和 all 一起写。实验 01–28 和 results/ 都跑在上游默认设置上，别带 prod 跑 run-all；
 #            带上之后用 prod-check.sh 核对。切回默认设置直接 ./cluster.sh up，compose 会按新配置重建容器。
-#   down     两套一起删，连数据卷。
+#   up zk    再加一个 Apache ZooKeeper 3.8.4，挂成 auxiliary ZooKeeper（apache_zk），实验 28 要用。
+#            ch1–ch3 会按新配置重建（多挂一个 cfg/aux_zookeeper.xml），数据在匿名卷里，重建不丢。
+#            可以和 all、prod 一起写。
+#   down     几套一起删，连数据卷。
 set -euo pipefail
 cd "$(dirname "$0")"
 source ./lib.sh
@@ -14,6 +17,7 @@ source ./lib-kafka.sh
 
 CH_ONLY=(-f docker-compose.yml)
 WITH_KAFKA=(-f docker-compose.yml -f docker-compose-kafka.yml)
+EVERYTHING=(-f docker-compose.yml -f docker-compose-kafka.yml -f docker-compose-zk.yml)
 
 # 插件版本对齐 docs/mechanism-map.md 引的源码锚点 v1.3.9。
 # sha256 和 GitHub release 页给这个 asset 公布的 digest 一致（2026-10-05 核过）。
@@ -57,6 +61,16 @@ wait_connect() {
   echo "Kafka Connect 超时，看 docker compose logs connect" >&2; exit 1
 }
 
+# ZooKeeper 自己起来很快，但 ch1–ch3 刚重建、要等它们连上 auxiliary ZooKeeper 才算好
+wait_zk() {
+  echo "等三个副本连上 auxiliary ZooKeeper（$ZK_AUX）..."
+  for i in $(seq 1 60); do
+    zk_ready && { echo "就绪：$(provenance_zk | sed 's/^# //')"; return 0; }
+    sleep 2
+  done
+  echo "ZooKeeper 超时，看 docker compose logs zk" >&2; exit 1
+}
+
 # check_prod  三个副本都带上了当前档位的生产设置：服务端取一项随档位变的、一项不变的，profile 取一项。
 # 逐项、带行为的核对在 prod-check.sh。
 check_prod() {
@@ -75,15 +89,17 @@ check_prod() {
 case "${1:-up}" in
   up)
     [ $# -gt 0 ] && shift
-    files=("${CH_ONLY[@]}"); kafka=0; prod=0
+    files=("${CH_ONLY[@]}"); kafka=0; prod=0; zk=0
     for a in "$@"; do
       case $a in
         all)  kafka=1 ;;
         prod) prod=1 ;;
-        *) echo "用法: $0 {up [all] [prod]|down|status}" >&2; exit 2 ;;
+        zk)   zk=1 ;;
+        *) echo "用法: $0 {up [all] [prod] [zk]|down|status}" >&2; exit 2 ;;
       esac
     done
     if [ "$kafka" = 1 ]; then fetch_plugin; files+=(-f docker-compose-kafka.yml); fi
+    if [ "$zk" = 1 ]; then files+=(-f docker-compose-zk.yml); fi
     if [ "$prod" = 1 ]; then
       export TIER=${TIER:-A}
       case $TIER in A|B|C) ;; *) echo "TIER 只能是 A、B、C，现在是 '$TIER'" >&2; exit 2 ;; esac
@@ -92,12 +108,13 @@ case "${1:-up}" in
     docker compose "${files[@]}" up -d
     wait_ch
     if [ "$kafka" = 1 ]; then wait_connect; fi
+    if [ "$zk" = 1 ]; then wait_zk; fi
     if [ "$prod" = 1 ]; then check_prod; fi ;;
-  down)   docker compose "${WITH_KAFKA[@]}" down -v ;;
+  down)   docker compose "${EVERYTHING[@]}" down -v ;;
   status)
-    docker compose "${WITH_KAFKA[@]}" ps
+    docker compose "${EVERYTHING[@]}" ps
     if v=$(q1 "SELECT version()" 2>/dev/null) && [ -n "$v" ]; then
       t=$(prod_tier); echo "${v}，${t:+生产设置 档 $t}${t:-上游默认设置}"
     fi ;;
-  *) echo "用法: $0 {up [all] [prod]|down|status}" >&2; exit 2 ;;
+  *) echo "用法: $0 {up [all] [prod] [zk]|down|status}" >&2; exit 2 ;;
 esac

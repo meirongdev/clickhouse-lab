@@ -1,0 +1,56 @@
+# 跑于 2026-10-14 21:58:36 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 576fccb+改动 | 机器 Apple M5（10 核 / 32 GiB），Docker 10 CPU / 15.7 GiB
+# ZooKeeper 3.8.4-9316c2a7a97e1666d8f4593f34dd6fc36ecc436c | 镜像 zookeeper:3.8.4@sha256:20d3c93ebda093d0c90911493396975e0e04523af225d8053d42bab781f9ca48
+
+=== 准备：一张复制表，复制元数据放在 Apache ZooKeeper 上 ===
+  · 引擎：ReplicatedReplacingMergeTree(create_time)，按 flow_time 的月份分区；Keeper 路径 /clickhouse/tables/6ce10d59-74f1-4955-99c5-463554e57905/01
+  [符合] 复制元数据在哪个协调服务上：apache_zk
+  [符合] 三个副本都挂在这个路径下：3
+  [符合] 建表之后 log/ 的计数器：0
+
+=== 一、一次 INSERT 在 log/ 下建一条，一次 merge 也建一条 ===
+  [符合] 10 次单行 INSERT（每次一个新的月分区）让计数器涨了：10
+  [符合] log_max_index 就是最后一条的序号（计数器 - 1）：9
+  [符合] 一次 1000 行的 INSERT（一个分区）涨了：1
+  [符合] 一次 INSERT 跨 3 个月分区（切成 3 个 part）涨了：3
+  · 202602 的 3 个 part 合成 1 个（等了约 0s）：这一段计数器涨了 3，减去 2 次 INSERT，merge 占了 1 个
+  [符合] merge 也在 log/ 下建条目（至少 1 条，1 = 是）：1
+
+=== 二、同样 20 行：20 次同步 INSERT，和 async_insert 合并之后 ===
+  · 20 个并发的同步 INSERT（同一个分区）：计数器涨了 21（每次 INSERT 一个 part，之后的 merge 再占几个）
+  [符合] 20 次同步 INSERT 至少占 20 个序号（1 = 是）：1
+  · 20 个并发的 async_insert（wait_for_async_insert=1，同一个节点）：计数器涨了 1
+  [符合] async_insert 把 20 次合成很少几个 part（不超过 3 个，1 = 是）：1
+  · 到这里表里 1055 行，每个分区一个 part，复制队列是空的（等了约 0s）
+
+=== 三、把 log/ 的计数器推到 2147483644，看到顶时发生什么 ===
+  · 改之前：计数器 39，log_max_index 38
+  · ZooKeeper 已停：/clickhouse/tables/6ce10d59-74f1-4955-99c5-463554e57905/01/log cversion 39 -> 2147483644, children=39, 新快照 zxid=0xb3f
+  · ZooKeeper 拉回来之后约 2s，三个副本都不再只读
+  [符合] 计数器：2147483644
+  · 同一时刻 zkCli stat 给的是：cversion = -18 numChildren = 10 （计数器 × 2 溢出了，直接读会以为是负数）
+  [符合] 前 4 次 INSERT 都成功，log_max_index 依次是：2147483644 2147483645 2147483646 2147483647
+  [符合] 第 4 次之后计数器停在上限（加 1 溢出成负数，落盘时被拒）：2147483647
+  第 5 次 INSERT 的报错原文：
+    Code: 244. DB::Exception: Unexpected logical error while adding block 0 with ID '202611_3561881346758941268_1782237747236062323': Node exists, path /clickhouse/tables/6ce10d59-74f1-4955-99c5-463554e57905/01/log/log-. (UNEXPECTED_ZOOKEEPER_ERROR) (version 25.3.
+  [符合] 报 Code 244 UNEXPECTED_ZOOKEEPER_ERROR，Node exists，path 指向 log/log-（1 = 是）：1
+  [符合] log/ 下有 log-2147483647，没有 log--（文档说的负数名字）：1/0
+  [符合] 计数器仍停在上限：2147483647
+  [符合] 换 ch2 写同样报 Node exists：1
+  [符合] 换 ch3 写同样报 Node exists：1
+  [符合] SYSTEM RESTART REPLICA 之后再写，还是 Node exists：1
+  [符合] 读不受影响：行数是前面写进去的 + 成功的那 4 行：1059
+  merge 分配不出来，OPTIMIZE 的报错原文：
+    Code: 999. Coordination::Exception: Transaction failed (Node exists): Op #0, path: /clickhouse/tables/6ce10d59-74f1-4955-99c5-463554e57905/01/log/log-. (KEEPER_EXCEPTION) (version 25.3.14.14 (official
+  [符合] OPTIMIZE 报 KEEPER_EXCEPTION，同样是 log/log- 上的 Node exists（1 = 是）：1
+  · system.errors（三个副本合计）：KEEPER_EXCEPTION 35，UNEXPECTED_ZOOKEEPER_ERROR 11
+
+=== 四、只用 SQL 恢复：新表（新的 Keeper 路径）+ ATTACH PARTITION FROM + EXCHANGE TABLES ===
+  · 新表的 Keeper 路径：/clickhouse/tables/9101c9cd-2e99-498c-95b4-217be88433e5/01（新的 UUID，log/ 从 0 开始）
+  [符合] 从坏表 ATTACH 每个分区都成功（0 = 没有失败的）：0
+  [符合] 三个副本上新表的行数都和坏表一样：1059 1059 1059
+  [符合] EXCHANGE 之后 seq_flow 用的是新路径：/clickhouse/tables/9101c9cd-2e99-498c-95b4-217be88433e5/01
+  [符合] EXCHANGE 之后写入恢复（空 = 成功）：
+  · 新表的 log_max_index：20
+  [符合] 坏表 DROP … SYNC 之后，它在 ZooKeeper 里的路径也删掉了（空 = 不存在）：
+  [符合] 最终行数（恢复前的全部 + 恢复后写的 1 行）：1060
+# 退出码 0

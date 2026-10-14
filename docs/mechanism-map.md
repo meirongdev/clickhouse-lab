@@ -15,6 +15,7 @@
 | 建表或删表撞车 | Atomic 延迟删除加 Keeper 残留 | `system.replicas` 里旧 replica 是否还在 | 实验 07 |
 | 误删表或分区，要找后悔药 | Atomic 延迟删除、detached、shadow | `system.dropped_tables`、`system.detached_parts` | 实验 13 |
 | 写全停、副本转只读 | Keeper 不可用 | `system.replicas.is_readonly`、Keeper 在途请求 | 实验 12 |
+| 一张表的 INSERT 全报 `Code: 244 … Node exists, path …/log/log-`，merge 报 `KEEPER_EXCEPTION`，副本不只读、读照常 | 复制日志 `log/` 的顺序号计数器（父节点上的 int32）到了 2147483647。每次 INSERT（每个分区一个 part）和每次 merge 各占一个序号，删日志不退 | `system.replicas.log_max_index` 是不是贴着 2147483647；别看 zkCli 里的 `cversion`，过半就是负数。恢复见 [daily-checklist.md](daily-checklist.md) 恢复动作 | 实验 28（协调服务是 Apache ZooKeeper；ClickHouse Keeper 没验） |
 | 物化视图喂的报表比明细 `FINAL` 多 | 物化视图在插入时触发，看不到合并：窗口外的重复、重发新版本式的改数据都会多算；sink 没开 `deduplicate_blocks_in_dependent_materialized_views` 时窗口内的重投也多算 | [report-pipeline.md](report-pipeline.md) 第三节的对账查询；`query_log` 里 sink 的 INSERT 带没带这个设置（dedup-solution.md 第六节） | 实验 24、25 |
 | 换分区之后数据少了一截 | 快照窗口；只数了一个副本 | 三个副本各自的当天行数；`part_log` 里快照到换分区之间 `error = 0` 的 `NewPart` | 实验 17、19 |
 

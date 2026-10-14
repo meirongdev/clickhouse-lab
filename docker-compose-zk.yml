@@ -1,0 +1,37 @@
+# Apache ZooKeeper：实验 28 用，./cluster.sh up zk 才会起它。
+#
+# 这套 lab 默认的协调服务是 ClickHouse Keeper（docker-compose.yml 里的 keeper）。托管服务那套集群用的是
+# Apache ZooKeeper，实验 28 复现的是 ZooKeeper 自己的顺序节点计数器（父节点的 cversion，一个 int32）到顶之后
+# 的行为，ClickHouse Keeper 是另一套实现，不能拿来代表。所以单独起一个 ZooKeeper，挂成 ClickHouse 的
+# auxiliary ZooKeeper（名字 apache_zk，见 cfg/aux_zookeeper.xml）：只有引擎路径写成 'apache_zk:/…' 的表
+# 把复制元数据放在它上面，其余实验照旧走 Keeper，互不影响。
+#
+# 数据放在两个命名卷里，实验 28 停掉 zk 之后用 tools/zk-cversion 改快照，靠的就是这两个卷。
+# 镜像钉 tag + digest，理由同 docker-compose.yml。
+#   docker buildx imagetools inspect zookeeper:<tag> --format '{{.Manifest.Digest}}'
+services:
+  zk:
+    image: zookeeper:3.8.4@sha256:20d3c93ebda093d0c90911493396975e0e04523af225d8053d42bab781f9ca48
+    container_name: ch-zk
+    hostname: zk
+    environment:
+      ZOO_4LW_COMMANDS_WHITELIST: "srvr,mntr,ruok"
+    volumes:
+      - zk-data:/data
+      - zk-datalog:/datalog
+  ch1:
+    depends_on: [keeper, zk]
+    volumes:
+      - ./cfg/aux_zookeeper.xml:/etc/clickhouse-server/config.d/aux_zookeeper.xml:ro
+  ch2:
+    depends_on: [keeper, zk]
+    volumes:
+      - ./cfg/aux_zookeeper.xml:/etc/clickhouse-server/config.d/aux_zookeeper.xml:ro
+  ch3:
+    depends_on: [keeper, zk]
+    volumes:
+      - ./cfg/aux_zookeeper.xml:/etc/clickhouse-server/config.d/aux_zookeeper.xml:ro
+
+volumes:
+  zk-data:
+  zk-datalog:

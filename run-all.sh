@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# 起集群（含 Kafka 栈，实验 09、21、23 要用），按顺序跑完全部实验，输出同时存进 results/，最后生成 docs/Test-Report.md。
+# 起集群（含 Kafka 栈，实验 09、21、23 要用；含 Apache ZooKeeper，实验 28 要用），按顺序跑完全部实验，
+# 输出同时存进 results/，最后生成 docs/Test-Report.md。
 # SLOW=1 ./run-all.sh 会带上默认跳过的慢速段（实验 02 多等约 5 分钟、实验 12 多等约 2.5 分钟、实验 13 多等约 8 分钟）。
 # results/ 里提交的 log 应该是 SLOW=1 跑出来的：每份 log 第一行的出处会注明 SLOW=1，最后一行是退出码。
 set -uo pipefail
@@ -14,7 +15,7 @@ if [ -n "$bad" ]; then
   exit 1
 fi
 
-./cluster.sh up all || exit 1
+./cluster.sh up all zk || exit 1
 mkdir -p results
 rc=0
 for s in experiments/*.sh; do

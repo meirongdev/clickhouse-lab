@@ -21,21 +21,22 @@
 | 清理已经写进去的重复行 | [docs/review-dedup-replace-plan.md](docs/review-dedup-replace-plan.md) | 16–20 |
 | 报表：建表、对账、重算、按时区上卷 | [docs/report-pipeline.md](docs/report-pipeline.md) | 24、25、26 |
 | 明细表在线换成 `ReplicatedReplacingMergeTree` | [docs/engine-migration-runbook.md](docs/engine-migration-runbook.md) | 27 |
-| 巡检、误删之后怎么救 | [docs/daily-checklist.md](docs/daily-checklist.md) | 07、11、13 |
+| 巡检、误删之后怎么救、复制日志序号到顶 | [docs/daily-checklist.md](docs/daily-checklist.md) | 07、11、13、28 |
 | 每个实验跑没跑过、过没过 | [docs/Test-Report.md](docs/Test-Report.md) | 全部 |
 | 接下来要做的事：规模验证、生产只读核对、要业务拍板的 | [docs/follow-ups.md](docs/follow-ups.md) | — |
 
 ## 跑起来
 
 ```bash
-./cluster.sh up        # 只起 ClickHouse（1 keeper + 3 副本）。除 09、21、23 之外的实验只要这个
+./cluster.sh up        # 只起 ClickHouse（1 keeper + 3 副本）。除 09、21、23、28 之外的实验只要这个
 ./cluster.sh up all    # 再加 Kafka 栈（ZooKeeper + Kafka + Kafka Connect），实验 09、21、23 要用
+./cluster.sh up zk     # 再加一个 Apache ZooKeeper，挂成 auxiliary ZooKeeper（apache_zk），实验 28 要用；可以和 all 一起写
 ./cluster.sh up prod   # 加挂 cfg/prod/ 的生产设置与约束（默认 A 档，可用 TIER=A|B|C 选档位）
 bash prod-check.sh     # 验证当前生产设置与 profile 约束在三副本上生效，并跑行为探针
 ./run-all.sh           # 起全套，按顺序跑完全部实验，输出存进 results/，再生成 docs/Test-Report.md 的汇总表
 SLOW=1 ./run-all.sh    # 连默认跳过的慢速段一起跑（实验 02、12、13 多等约 15 分钟）；整套约 45 分钟
 ./report.sh            # 只从 results/ 重新生成汇总表，不碰集群
-./cluster.sh down      # 收工，两套一起删，连数据卷
+./cluster.sh down      # 收工，几套一起删，连数据卷
 ```
 
 单跑一个：
@@ -47,7 +48,7 @@ bash experiments/02-dedup-window-overflow.sh
 
 每个实验脚本自带断言，`[符合]` / `[不符]` 直接打在输出里，退出码非 0 表示有断言没过。注意 `[符合]` 说的是「观测和脚本写死的期望一致」，不是「文章那条断言成立」——脚本写的是修正后的行为，两者的区别见[实验设计](#实验设计)。脚本各自清理自己建的表、topic 和 connector，可以反复跑。
 
-需要 Docker。`results/` 这一批跑在 Apple M2 Pro（12 核 / 32 GiB）上的 OrbStack 里，虚拟机 12 CPU / 16 GiB；耗时、实验 26 的「不限线程用几个核」都随机器变，换一台机器（比如 10 核的 M5）重跑，这类数字会不一样。ClickHouse 那套镜像约 1 GB，`up` 十几秒；Kafka 栈三个镜像合计约 3.5 GB（有共用层），Connect 起来要二三十秒，第一次 `up all` 还会从 GitHub release 下载约 12 MB 的 connector 插件并校验 sha256（插件不进 git）。
+需要 Docker。`results/` 里实验 01–27 跑在 Apple M2 Pro（12 核 / 32 GiB）上的 OrbStack 里，虚拟机 12 CPU / 16 GiB；实验 28 跑在 Apple M5（10 核 / 32 GiB）上。耗时、实验 26 的「不限线程用几个核」都随机器变，换一台机器重跑，这类数字会不一样。ClickHouse 那套镜像约 1 GB，`up` 十几秒；Kafka 栈三个镜像合计约 3.5 GB（有共用层），Connect 起来要二三十秒，第一次 `up all` 还会从 GitHub release 下载约 12 MB 的 connector 插件并校验 sha256（插件不进 git）。`up zk` 多一个约 300 MB 的 ZooKeeper 镜像；实验 28 第一次跑时还要构建一个改快照用的小工具镜像（`tools/zk-cversion`，编译阶段用约 480 MB 的 `eclipse-temurin:17-jdk`）。
 
 `results/` 里每份 log 的第一行是这次跑的出处，单跑一个实验也有：
 
@@ -59,7 +60,7 @@ bash experiments/02-dedup-window-overflow.sh
 - `lab` 后面是 git rev。带「+改动」表示跑的时候脚本或配置有没提交的修改，这时 rev 指的那一版不是实际跑的那一版。
 - `机器` 是宿主机的 CPU、核数、内存，加上 Docker 虚拟机分到的 CPU 和内存。耗时、用了几个核这类数字只在同一台机器的 log 之间能比；`report.sh` 把各份 log 一样的出处合成一行写在汇总表上方，不一样的按取值列出各自是哪几个实验。
 - `SLOW=1` 表示慢速段跑过了；没有这一项的 log 里就没有那几段的证据。提交 `results/` 之前用 `SLOW=1 ./run-all.sh`。
-- 实验 09、21、23 还有第二行，记 Kafka Connect 和 connector 插件的版本。
+- 实验 09、21、23 还有第二行，记 Kafka Connect 和 connector 插件的版本；实验 28 的第二行记 ZooKeeper 的版本和镜像。
 - `run-all.sh` 在每份 log 最后追加一行 `# 退出码 N`。没有这一行的 log 不是 `run-all.sh` 跑出来的，或者跑到一半断了。
 - `run-all.sh` 开跑之前会先查一遍脚本里有没有「`$变量` 后面紧跟全角字符」：macOS 自带的 bash 3.2 会把全角字符吃进变量名，`set -u` 下脚本当场退出，写成 `${变量}` 才行。
 
@@ -70,10 +71,11 @@ bash experiments/02-dedup-window-overflow.sh
 | 版本 | 钉到 `25.3.14.14@sha256:b627d7a9…`（tag + digest） |
 | 拓扑 | 1 keeper + 3 clickhouse-server，1 shard × 3 replicas |
 | cluster 名 | `default` |
-| 库引擎 | 实验 01–26 用默认的 `Atomic` 库，DDL 带 `ON CLUSTER default`；生产是 `Replicated` 库，实验 27 和待建实验 22 用 `Replicated` 库。两种库的差别见 `docs/production-shape.md` 第一节 |
+| 库引擎 | 除实验 27 外都用默认的 `Atomic` 库，DDL 带 `ON CLUSTER default`；生产是 `Replicated` 库，实验 27 和待建实验 22 用 `Replicated` 库。两种库的差别见 `docs/production-shape.md` 第一节 |
 | Keeper | 单节点，同样钉到 `25.3.14.14@sha256:2c8b97bb…` |
 | HTTP 端口 | ch1 `18123`、ch2 `18124`、ch3 `18125` |
 | Kafka 栈（`up all`） | Confluent Platform 7.7.0 的社区版镜像（内置 Apache Kafka 3.7.0），同样钉 tag + digest；单 broker；Connect 的 REST 在 `8083` |
+| ZooKeeper（`up zk`） | Apache ZooKeeper 3.8.4 单节点，钉到 `zookeeper:3.8.4@sha256:20d3c93e…`，挂成 auxiliary ZooKeeper `apache_zk`（`cfg/aux_zookeeper.xml`）。只有引擎路径写成 `'apache_zk:/…'` 的表用它，现在只有实验 28；别的表照旧走 Keeper |
 | Connector | clickhouse-kafka-connect v1.3.9，和 `docs/mechanism-map.md` 引的源码锚点同一版 |
 
 版本钉在 25.3 这条 LTS 是为了对齐生产（25.3.14.1）。去重窗口那两个默认值在 25.9 和 25.10 各改过一次，换个大版本实验 01 就对不上了。Kafka 一侧选 3.7.0 也是同样的理由：文档里 Connect 框架的行为都是按 3.7.0 的源码核的。
@@ -87,19 +89,21 @@ bash experiments/02-dedup-window-overflow.sh
 ## 文件
 
 ```
-cluster.sh                 起停集群：up / up all / up prod / down / status
+cluster.sh                 起停集群：up / up all / up zk / up prod / down / status
 prod-check.sh              生产设置核对与行为探针（配合 ./cluster.sh up prod 使用）
 run-all.sh                 跑全部实验并存 results/，最后调 report.sh
 report.sh                  从 results/ 生成 docs/Test-Report.md 里的汇总表
-lib.sh                     共用函数：q / on_all / rr / expect / wait_znodes / provenance / text_log_since
+lib.sh                     共用函数：q / on_all / rr / expect / wait_znodes / provenance / text_log_since / zk_*
 lib-kafka.sh               实验 09、21、23 用的 Kafka / Connect 函数
 docker-compose.yml         ClickHouse 那套
 docker-compose-kafka.yml   Kafka 栈
+docker-compose-zk.yml      实验 28 的 Apache ZooKeeper（./cluster.sh up zk 叠加）
 docker-compose.prod.yml    生产设置挂载（./cluster.sh up prod 叠加）
-cfg/                       keeper、cluster、三个节点的 macros、KeeperMap 路径前缀
+cfg/                       keeper、cluster、三个节点的 macros、KeeperMap 路径前缀、auxiliary ZooKeeper（aux_zookeeper.xml）
 cfg/prod/                  生产服务端设置与 default profile 约束（A/B/C 三档，脱敏）
 connect-plugins/           up all 时下载的 connector 插件（.gitignore 里，不进 git）
-experiments/               25 个实验脚本（15、22 还没建），文件头写了它验的是哪条断言、怎么设计的、参考了什么
+tools/zk-cversion/         实验 28 改停着的 ZooKeeper 快照里某个节点 cversion 的小工具（实验里自动构建）
+experiments/               26 个实验脚本（15、22 还没建），文件头写了它验的是哪条断言、怎么设计的、参考了什么
 results/                   实跑输出，每份 log 第一行是出处
 docs/                      日常排查用的知识和几个方案，索引在 docs/README.md
 ```
@@ -152,6 +156,12 @@ docs/                      日常排查用的知识和几个方案，索引在 d
 | 25 | 报表怎么发现漂移、怎么安全地重算、时区怎么上卷 | 三种重复和改数据让报表偏的量和注入的一致，按天对账准确找出偏了的天；从明细 `FINAL` 重算一天再 `REPLACE PARTITION`，三个副本逐桶一致；不过闸会把重算期间的迟到写入抹掉。30 分钟桶对上海、加尔各答（+5:30）、纽约（含夏令时那天）上卷全对，加德满都（+5:45）对不上 |
 | 26 | 大查询限 `max_threads` 的效果和代价 | 限 N 就不超过 N 个核；报表重算本来只用 2 个核左右，限到 2 只慢 6%–39%；能并行的大聚合限到 2 慢 3.6 倍（12 CPU 的虚拟机上）；不限线程的重算跑着时，同节点小批写入的 p95 是 33–69 ms，限 2 之后 9–19 ms（只记录、不断言，5 次运行方向一致） |
 | 27 | 明细表在线换成 `ReplicatedReplacingMergeTree` | `Replicated` 库里：`ATTACH` 搬历史写 0 行；停了 merge 的表，有可合并的 part 时复制队列不会归零，排空要用 `SYNC REPLICA … LIGHTWEIGHT`；停 sink、排空、按 `part_log` 补齐、按 `system.parts` 行数过闸之后 `EXCHANGE`，sink 写的每个 offset 恰好一份、物化视图跟着名字走；不排空就切换会把在途的那批写进旧表；同名 `UNION ALL` 视图不能写；回滚之后一行不丢，回滚的闸要拿执行 `REPLACE` 的副本当基准，各副本各比各的会误报 |
+
+28 验的是另一次事故：协调服务是 Apache ZooKeeper 的托管集群上，一张小批量、高频写入的复制表，某一刻起所有 INSERT 都报 `Node exists`。要用 `./cluster.sh up zk`。
+
+| # | 验的是什么 | 量到了什么 |
+|---|---|---|
+| 28 | 复制日志 `log/` 的顺序号计数器（ZooKeeper 父节点上的一个 int32）到顶之后 | 每次 INSERT（每个分区一个 part）和每次 merge 各占一个序号；20 次并发的同步 INSERT 占 21 个，同样 20 行走 `async_insert` 只占 1 个。停掉 ZooKeeper 把计数器改到 2147483644（`tools/zk-cversion`），前 4 次 INSERT 把它用到 2147483647，第 5 次起报 `Code: 244 … Node exists, path …/log/log-`；换副本写、`SYSTEM RESTART REPLICA` 都没用，读照常，merge 报 `KEEPER_EXCEPTION`；没有出现文档说的负数名字。zkCli 里的 `cversion` 是「计数器 × 2 − 子节点数」，过了一半就是负数，要看 `system.replicas.log_max_index`。新表（新的 Keeper 路径）+ `ATTACH PARTITION FROM` + `EXCHANGE TABLES` 只用 SQL 就能恢复，三个副本行数一致 |
 
 还没做的实验也记在 `docs/` 里，按编号找：
 

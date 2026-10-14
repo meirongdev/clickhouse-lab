@@ -1,0 +1,13 @@
+<!-- 实验 28：把 docker-compose-zk.yml 里的 Apache ZooKeeper 挂成名为 apache_zk 的 auxiliary ZooKeeper。
+     引擎路径写成 'apache_zk:/clickhouse/tables/…' 的表，复制元数据放在它上面；其余表仍走默认的 Keeper。
+     https://clickhouse.com/docs/engines/table-engines/mergetree-family/replication -->
+<clickhouse>
+  <auxiliary_zookeepers>
+    <apache_zk>
+      <node>
+        <host>zk</host>
+        <port>2181</port>
+      </node>
+    </apache_zk>
+  </auxiliary_zookeepers>
+</clickhouse>

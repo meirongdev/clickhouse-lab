@@ -78,7 +78,7 @@ lab 上一个新写的 Wide part（实验之外另看的，2026-10-11）：
 
 ## 八、复制和 Keeper
 
-- **Keeper 里存什么。** 每张复制表在 Keeper 里有一个目录：`log`（复制日志）、`blocks`（去重标记）、`block_numbers`（分配块号）、`mutations`，以及每个副本自己的 `replicas/<副本>/queue`、`parts`、`host`、`is_active` 等（lab 上看过）。
+- **Keeper 里存什么。** 每张复制表在 Keeper 里有一个目录：`log`（复制日志）、`blocks`（去重标记）、`block_numbers`（分配块号）、`mutations`，以及每个副本自己的 `replicas/<副本>/queue`、`parts`、`host`、`is_active` 等（lab 上看过）。`log` 下每一条是顺序节点，序号取自父节点上的一个 int32 计数器，每次 INSERT（每个分区一个 part）和每次 merge 各占一个，删日志不退；协调服务是 Apache ZooKeeper 时，用到 2147483647 之后这张表就写不进去了（lab 实测，实验 28），巡检看 `system.replicas.log_max_index`。
 - **数据怎么到别的副本。** 收到 INSERT 的副本写好 part，在 `log` 里记一条。其他副本把日志拉进自己的 `queue`，逐条执行：`GET_PART` 从有这个 part 的副本经 9009 端口拉过来，`part_log` 里记 `DownloadPart`（实验 03）；`MERGE_PARTS` 自己合；`REPLACE_RANGE` 换分区（实验 17）。
 - **多主、异步。** 每个副本都能写，都是 leader（实验 02）。INSERT 默认只等一个副本，`ALTER` 默认只等当前副本（`alter_sync = 1`，实验 17）。所以三个副本之间会短暂不一致，核对要查全部副本（`clusterAllReplicas`）。
 - **Keeper 出问题时。** 停掉：复制表立刻转只读，读照常。卡住：INSERT 卡在提交那一步，客户端超时放弃，Keeper 回来后服务端照样提交。生产上的重复行就从这里开始（实验 12、21）。

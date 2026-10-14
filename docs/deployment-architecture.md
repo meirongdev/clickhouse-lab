@@ -27,6 +27,8 @@
      └───────────────────────────────────────────┘
 ```
 
+`./cluster.sh up zk` 另起一个 Apache ZooKeeper 3.8.4（`ch-zk`，`zk:2181`），三个副本把它挂成 auxiliary ZooKeeper `apache_zk`（`cfg/aux_zookeeper.xml`）。只有引擎路径写成 `'apache_zk:/…'` 的表把复制元数据放在它上面，现在只有实验 28；默认的协调服务仍是上图的 `ch-keeper`。
+
 节点之间走两条：9000（native，`clusterAllReplicas` 扇出用）和 9009（interserver HTTP，副本之间 fetch part 用）。两个都只在 compose 网络里，没映射到宿主机。
 
 ### 实测到的拓扑（lab 实测，实验 01、12）

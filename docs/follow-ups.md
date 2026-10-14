@@ -11,7 +11,7 @@
 - [ ] OrbStack 的内存调到 100 GB 以上，给 macOS 留十几 GB；CPU 给全部核。核数会记在日志出处行的「机器」里。
 - [ ] 数据目录放在空间够的盘上：P3 至少 250 GB，P4（B 档三副本）至少 400 GB。内置盘不够就接外置 SSD，用 `SCALE_DATA_DIR` 指过去。
 - [ ] 跑规模实验之前 `./cluster.sh down`，别让 Kafka 栈占着资源。
-- [ ] 先在这台机器上跑一遍 `SLOW=1 ./run-all.sh`，确认 25 个实验也全过。它会覆盖 `results/`，跑完用 `git diff` 看和 M2 Pro 那一轮的差别。要换成这台机器当基准，就提交，并同步改文档里引用的耗时和核数（report-pipeline.md 第五节、根 README 实验 26 那一行等）；不换就 `git checkout results/ docs/Test-Report.md` 还原。
+- [ ] 先在这台机器上跑一遍 `SLOW=1 ./run-all.sh`，确认 26 个实验也全过。它会覆盖 `results/`，跑完用 `git diff` 看和 M2 Pro 那一轮的差别。要换成这台机器当基准，就提交，并同步改文档里引用的耗时和核数（report-pipeline.md 第五节、根 README 实验 26 那一行等）；不换就 `git checkout results/ docs/Test-Report.md` 还原。
 
 **先写脚本**
 
@@ -40,7 +40,7 @@
 
 - 分法：Mac Studio 跑 Keeper 和两个副本，M2 跑一个副本。副本之间真的走网络拉数据、各写各的盘，比三个副本挤在一块盘上更接近生产；两台机器的时钟也真的不一样，正好验报表闸往前留的那 5 秒（report-pipeline.md 第三节，现在是推断）。
 - 限制：M2 只有 32 GB，给不到 B 档副本的 32 GB 限额，它那个副本的内存数字不能当生产看，只看拉取字节、硬链接、复制耗时（S5、S7）。单副本的阶段只用 Mac Studio，组集群没好处。
-- 现有 25 个实验还在一台机器上跑：08、12、13、20 要进容器看文件或者停容器；DDL 全走 `ON CLUSTER`，副本在端口映射后面时，服务端可能在集群配置里认不出哪一个是自己（推断，搭的时候验）。实验 22 计划用 `Replicated` 库、不写 `ON CLUSTER`，正好能跨机器。
+- 现有 26 个实验还在一台机器上跑：08、12、13、20、28 要进容器看文件或者停容器；DDL 全走 `ON CLUSTER`，副本在端口映射后面时，服务端可能在集群配置里认不出哪一个是自己（推断，搭的时候验）。实验 22 计划用 `Replicated` 库、不写 `ON CLUSTER`，正好能跨机器。
 
 - [ ] 两台走有线网，用固定 IP 或者 `.local` 主机名；macOS 防火墙放行，确认 OrbStack 发布的端口在局域网里连得上。
 - [ ] 每个副本的 `interserver_http_host` 填它所在那台 Mac 的局域网地址；同一台 Mac 上的两个副本，端口在容器里外都错开。副本把自己的地址和端口登记在 Keeper 里，别的副本照着去连。M2 上的副本连 Mac Studio 上的 Keeper。

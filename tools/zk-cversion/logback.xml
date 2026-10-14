@@ -1,0 +1,8 @@
+<!-- 工具只需要自己的那一行输出；ZooKeeper 恢复快照时的 INFO 日志压到 WARN -->
+<configuration>
+  <appender name="STDERR" class="ch.qos.logback.core.ConsoleAppender">
+    <target>System.err</target>
+    <encoder><pattern>%-5level %logger{20} - %msg%n</pattern></encoder>
+  </appender>
+  <root level="WARN"><appender-ref ref="STDERR"/></root>
+</configuration>

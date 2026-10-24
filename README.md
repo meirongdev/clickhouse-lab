@@ -11,18 +11,20 @@
 3. ClickHouse 的块级去重窗口
 4. 清理 ClickHouse 重复行的 REPLACE PARTITION runbook
 
-后来又把落到这套生产上的几个方案放进来验：去重方案、报表链路、明细表换引擎（实验 24–27）。按要做的事找文档：
+后来又把落到这套生产上的几个方案放进来验：去重方案、报表链路、明细表换引擎、服务端异步插入与 token 去重（实验 24–29）。按要做的事找文档：
 
 | 要做的事 | 看哪份 | 依据的实验 |
 |---|---|---|
+| **按业务与运维问题现场演示（四条主线与受众清单）** | **[docs/knowledge-map.md](docs/knowledge-map.md)** | **全部** |
 | 先弄懂 ClickHouse 怎么工作：part、merge、复制、物化视图 | [docs/concepts.md](docs/concepts.md) | 03、08、11、14、20、24 |
-| 排查行数多了、少了、不对 | [docs/data-problems.md](docs/data-problems.md)、[docs/mechanism-map.md](docs/mechanism-map.md) | 02、03、09、10、12、21、23 |
-| 定去重方案：为什么不靠 `exactlyOnce`、六项措施 | [docs/dedup-solution.md](docs/dedup-solution.md) | 02、14、21、23、24、27 |
+| 排查行数多了、少了、不对 | [docs/data-problems.md](docs/data-problems.md)、[docs/mechanism-map.md](docs/mechanism-map.md) | 02、03、09、10、12、21、23、29 |
+| 定去重方案：为什么不靠 `exactlyOnce`、六项措施、异步攒批与 token 去重 | [docs/dedup-solution.md](docs/dedup-solution.md) | 02、14、21、23、24、27、29 |
 | 清理已经写进去的重复行 | [docs/review-dedup-replace-plan.md](docs/review-dedup-replace-plan.md) | 16–20 |
 | 报表：建表、对账、重算、按时区上卷 | [docs/report-pipeline.md](docs/report-pipeline.md) | 24、25、26 |
 | 明细表在线换成 `ReplicatedReplacingMergeTree` | [docs/engine-migration-runbook.md](docs/engine-migration-runbook.md) | 27 |
 | 巡检、误删之后怎么救、复制日志序号到顶 | [docs/daily-checklist.md](docs/daily-checklist.md) | 07、11、13、28 |
 | 查生产 Aiven 集群的架构、三档规格与配置参数 | [docs/aiven-production-specs.md](docs/aiven-production-specs.md) | prod-check |
+| 评估 Aiven 升级 25.8 LTS 的影响、机制变化与换节点重投风险 | [docs/aiven-upgrade-25.8.md](docs/aiven-upgrade-25.8.md) | 12、21、29 |
 | 每个实验跑没跑过、过没过 | [docs/Test-Report.md](docs/Test-Report.md) | 全部 |
 | 接下来要做的事：规模验证、生产只读核对、要业务拍板的 | [docs/follow-ups.md](docs/follow-ups.md) | — |
 
@@ -104,7 +106,7 @@ cfg/                       keeper、cluster、三个节点的 macros、KeeperMap
 cfg/prod/                  生产服务端设置与 default profile 约束（A/B/C 三档，脱敏）
 connect-plugins/           up all 时下载的 connector 插件（.gitignore 里，不进 git）
 tools/zk-cversion/         实验 28 改停着的 ZooKeeper 快照里某个节点 cversion 的小工具（实验里自动构建）
-experiments/               26 个实验脚本（15、22 还没建），文件头写了它验的是哪条断言、怎么设计的、参考了什么
+experiments/               27 个实验脚本（15、22 还没建），文件头写了它验的是哪条断言、怎么设计的、参考了什么
 results/                   实跑输出，每份 log 第一行是出处
 docs/                      日常排查用的知识和几个方案，索引在 docs/README.md
 ```
@@ -163,6 +165,7 @@ docs/                      日常排查用的知识和几个方案，索引在 d
 | # | 验的是什么 | 量到了什么 |
 |---|---|---|
 | 28 | 复制日志 `log/` 的顺序号计数器（ZooKeeper 父节点上的一个 int32）到顶之后 | 每次 INSERT（每个分区一个 part）和每次 merge 各占一个序号；20 次并发的同步 INSERT 占 21 个，同样 20 行走 `async_insert` 只占 1 个。停掉 ZooKeeper 把计数器改到 2147483644（`tools/zk-cversion`），前 4 次 INSERT 把它用到 2147483647，第 5 次起报 `Code: 244 … Node exists, path …/log/log-`；换副本写、`SYSTEM RESTART REPLICA` 都没用，读照常，merge 报 `KEEPER_EXCEPTION`；没有出现文档说的负数名字。zkCli 里的 `cversion` 是「计数器 × 2 − 子节点数」，过了一半就是负数，要看 `system.replicas.log_max_index`。新表（新的 Keeper 路径）+ `ATTACH PARTITION FROM` + `EXCHANGE TABLES` 只用 SQL 就能恢复，三个副本行数一致 |
+| 29 | 服务端异步插入与 `insert_deduplication_token` 联用、攒批减压及切换边界 | 25.3 的 `async_insert_deduplicate` 默认 0：只开 `async_insert = 1` 时，一个刷新桶只保留第 1 条子插入的 token 写进 `blocks/`，第 2..N 条子插入的 token 被丢弃（重投漏拦），且当重投的第 1 条子插入建桶时，同批搭车的全新子插入会被整批判为已去重而静默吞掉！开齐 `async_insert = 1, wait_for_async_insert = 1, async_insert_deduplicate = 1` 并经 HTTP 参数传 token 时，20 条并发小插入合成 1 个 `NewPart`、`log/` 只增 1 条、`async_blocks/` 记下全部 20 个 token（默认窗口 10000），三种重投全部拦住，坏子插入报 `Code: 27` 并单条回滚、不影响同批好数据；若把 `SETTINGS insert_deduplication_token` 写进 SQL 文本内则会按 AST 拆桶导致攒批失效；同步 `blocks/` 与异步 `async_blocks/` 互不查对方 |
 
 还没做的实验也记在 `docs/` 里，按编号找：
 
@@ -174,9 +177,9 @@ docs/                      日常排查用的知识和几个方案，索引在 d
 | # | 验的是什么 | 量到了什么 |
 |---|---|---|
 | 16 | 方案的 SQL 原文逐条跑 | `CREATE TABLE … LIKE` 报 `SYNTAX_ERROR`；`min(create_time) AS create_time` 让后面的 `argMin` 报 `ILLEGAL_AGGREGATION`；`INSERT … SELECT` 按位置对列，列序一错整个窗口 3,125 行坏掉或丢掉，方案那两条校验照样全过；`cityHash64` 遇 NULL 返回 NULL，哈希不包 `tuple` 会漏数 |
-| 17 | 换分区的时机 | 建完临时表之后写进来的 50 行被静默抹掉；从落后副本建临时表，三个副本一起丢 30 行；只查当前节点时，落后副本还挂着 18 个重复键，核对却是绿的。`REPLACE_RANGE` 落地的 part 在 part_log 里记 `NewPart` |
+| 17 | 换分区的时机与多副本落点 | 建完临时表之后写进来的 50 行被静默抹掉；从落后副本建临时表，三个副本一起丢 30 行；只查当前节点时，落后副本还挂着 18 个重复键，核对却是绿的；往临时表的 INSERT 落在 ch1（默认只写单副本即返回）、紧接着的 `REPLACE PARTITION` 随机落到还没拉完临时表 part 的 ch3，三个副本上的当天分区一起变成 0 行。`REPLACE_RANGE` 落地的 part 在 part_log 里记 `NewPart` |
 | 18 | 被否掉的轻量删除（按 `_part_offset`） | 原文报 `Code: 36`；放开之后读窗口的遍数约等于全表 part 数的一半（62 → 34 遍，123 → 68 遍），全表每个 part 都出一个新版本（没命中的是硬链接克隆、写盘 0 字节）；加 `IN PARTITION` 后遍数只跟当天分区的 part 数走、只碰当天的 part。字面量 DELETE 不加 `IN PARTITION` 也给全表每个 part 出新版本；两份 `create_time` 相同时按 `create_time` 删会两份一起删 |
-| 19 | 改过的 runbook 整套跑 | 快照、两道闸、全副本核对、part_log 检查分别拦下 17 的三种情形；**R4 必须数全部副本**：只数执行节点的旧版 R4 会放行一笔还没复制过来的写入，换分区后它在三个副本上全没了；回滚后和原分区逐行一致 |
+| 19 | 改过的 runbook 整套跑 | 快照、两道闸、全副本核对、part_log 检查分别拦下 17 的四种情形；工作表写入带 `insert_quorum = 3`、挂载与换分区带 `alter_sync = 2`；**R4 必须同时数原表、`dedup`、`bak` 在全部副本上的行数**，并按目标分区过滤复制队列且排除后台 merge/mutation；回滚后和原分区逐行一致 |
 | 20 | `ATTACH PARTITION … FROM` / `REPLACE PARTITION` 复不复用文件 | 快照、换分区、回滚三条语句在三个副本上都和来源共用 inode、写入 0 行，另两个副本也是本地挂硬链接、没去拉数据（本地盘；S3 没验）；换分区后旧文件由快照表留着 |
 
 ### 重复行那条链是怎么开头的（实验 12、21）

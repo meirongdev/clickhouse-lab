@@ -4,12 +4,14 @@
 
 | 文件 | 干什么用 |
 |---|---|
+| `knowledge-map.md` | 业务与运维问题现场演示导览：四条核心问题主线（接入幂等与异步攒批、历史脏数据清理、下游聚合一致性、日常运维与高危故障）、按受众裁剪的演示清单与实验台覆盖边界 |
 | `concepts.md` | ClickHouse 怎么工作：写入怎么变成 part、part 长什么样、分区、怎么读、merge、MergeTree 家族、复制和 Keeper、物化视图、改删数据，每一节对到这套生产和仓库里的实验 |
 | `mechanism-map.md` | 症状往机制上收敛的那张表，外加每个默认值的出处（ClickHouse 和 Kafka Connect 两侧） |
 | `data-problems.md` | 多了 / 少了 / 不对三类问题的排查顺序，含对账口径 |
 | `daily-checklist.md` | 固定跑的巡检、出事时的恢复动作、需要演练的条目 |
 | `deployment-architecture.md` | lab 的部署形状（实测）、和生产的差别、生产选型的判断与依据 |
 | `aiven-production-specs.md` | Aiven 生产环境规格与配置全集：集群架构、三档规格（A/B/C）、服务端参数、Profile 强约束、冷热分层及托管平台特有行为 |
+| `aiven-upgrade-25.8.md` | Aiven 升级 25.8 LTS 影响评估与运维指南：核心问题解决能力对照、新特性（FINAL 跳数索引等）、行为变更、整组换节点重投风险与灰度升级建议 |
 | `review-dedup-replace-plan.md` | 评审一份 REPLACE PARTITION 去重方案：测试方案、实验 16–20 的结论、改过的 runbook、几种清理办法的对比 |
 | `production-shape.md` | 生产形态的脱敏规格：集群、节点规格和数据量的三档、冷热分层、34 列宽表的 DDL、写入速率、重复的三种形状、生产实际设置对照（`cfg/prod/`）、只读补数据的 SQL |
 | `plan-scale-dedup.md` | 待建实验 22 的计划：在更大的机器上按生产量级（每天一千多万到三亿多行）跑改过的 runbook，量内存、磁盘、part 数这些能带到生产的数 |

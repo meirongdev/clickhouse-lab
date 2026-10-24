@@ -37,6 +37,7 @@ title() {
     27) echo "引擎迁移：ATTACH + EXCHANGE，在线、可回滚" ;;
     28) echo "ZooKeeper 顺序节点计数器到顶，复制表写不进去" ;;
     29) echo "异步插入与 insert_deduplication_token 联用及边界" ;;
+    30) echo "3 节点 4c16gb 25.8 阶梯压测（10M 至 3 亿行 ReplacingMergeTree）" ;;
     *)  echo "（report.sh 里没登记）" ;;
   esac
 }

@@ -106,7 +106,7 @@ cfg/                       keeper、cluster、三个节点的 macros、KeeperMap
 cfg/prod/                  生产服务端设置与 default profile 约束（A/B/C 三档，脱敏）
 connect-plugins/           up all 时下载的 connector 插件（.gitignore 里，不进 git）
 tools/zk-cversion/         实验 28 改停着的 ZooKeeper 快照里某个节点 cversion 的小工具（实验里自动构建）
-experiments/               27 个实验脚本（15、22 还没建），文件头写了它验的是哪条断言、怎么设计的、参考了什么
+experiments/               28 个实验脚本（15、22 还没建，含 30 规模压测），文件头写了它验的是哪条断言、怎么设计的、参考了什么
 results/                   实跑输出，每份 log 第一行是出处
 docs/                      日常排查用的知识和几个方案，索引在 docs/README.md
 ```
@@ -166,6 +166,7 @@ docs/                      日常排查用的知识和几个方案，索引在 d
 |---|---|---|
 | 28 | 复制日志 `log/` 的顺序号计数器（ZooKeeper 父节点上的一个 int32）到顶之后 | 每次 INSERT（每个分区一个 part）和每次 merge 各占一个序号；20 次并发的同步 INSERT 占 21 个，同样 20 行走 `async_insert` 只占 1 个。停掉 ZooKeeper 把计数器改到 2147483644（`tools/zk-cversion`），前 4 次 INSERT 把它用到 2147483647，第 5 次起报 `Code: 244 … Node exists, path …/log/log-`；换副本写、`SYSTEM RESTART REPLICA` 都没用，读照常，merge 报 `KEEPER_EXCEPTION`；没有出现文档说的负数名字。zkCli 里的 `cversion` 是「计数器 × 2 − 子节点数」，过了一半就是负数，要看 `system.replicas.log_max_index`。新表（新的 Keeper 路径）+ `ATTACH PARTITION FROM` + `EXCHANGE TABLES` 只用 SQL 就能恢复，三个副本行数一致 |
 | 29 | 服务端异步插入与 `insert_deduplication_token` 联用、攒批减压及切换边界 | 25.3 的 `async_insert_deduplicate` 默认 0：只开 `async_insert = 1` 时，一个刷新桶只保留第 1 条子插入的 token 写进 `blocks/`，第 2..N 条子插入的 token 被丢弃（重投漏拦），且当重投的第 1 条子插入建桶时，同批搭车的全新子插入会被整批判为已去重而静默吞掉！开齐 `async_insert = 1, wait_for_async_insert = 1, async_insert_deduplicate = 1` 并经 HTTP 参数传 token 时，20 条并发小插入合成 1 个 `NewPart`、`log/` 只增 1 条、`async_blocks/` 记下全部 20 个 token（默认窗口 10000），三种重投全部拦住，坏子插入报 `Code: 27` 并单条回滚、不影响同批好数据；若把 `SETTINGS insert_deduplication_token` 写进 SQL 文本内则会按 AST 拆桶导致攒批失效；同步 `blocks/` 与异步 `async_blocks/` 互不查对方 |
+| 30 | 3 节点 4c16gb（Aiven Tier A / business-16）ClickHouse 25.8 LTS 单日分区 3 亿条 ReplacingMergeTree 阶梯式压测 | 用户专项提问 | **无法支撑**：3 亿行宽表单副本落盘 65.52 GiB，Merge 临时空间峰值达 55.45 GiB（单节点瞬时达 120.97 GiB，占 A 档 200 GB 本地盘 60.5%）；后台单个 33.85 GiB 合并耗时超 500 秒，4 vCPU 算力挤占致写入速率崩塌 78.2%（从 2.00M 行/s 跌至 436k 行/s），流式写入必堆 Part 触发 Code 252 `Too many parts`；精准去重/对账（`count(DISTINCT id)`）在 2.2 亿行打爆 9.94 GiB 内存硬限抛 Code 241 OOM；25.8 的 `use_skip_indexes_if_final = 1` 在带跳数索引过滤时提速 2.6～5.9 倍，但全分区统计无法受益、单次耗时达 69.5 秒 |
 
 还没做的实验也记在 `docs/` 里，按编号找：
 

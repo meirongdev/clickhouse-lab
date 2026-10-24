@@ -1,0 +1,75 @@
+# 3-node ClickHouse 25.8 Scale Test Cluster
+# Limits: 4 vCPU / 16 GB per node (Aiven Tier A business-16)
+# Config: Production Tier A settings (cfg/prod/server.xml, server-A.xml, users.xml, users-A.xml)
+
+x-prod-cfg: &prod_cfg
+  - ./cfg/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+  - ./cfg/keeper_map.xml:/etc/clickhouse-server/config.d/keeper_map.xml:ro
+  - ./cfg/prod/server.xml:/etc/clickhouse-server/config.d/prod-server.xml:ro
+  - ./cfg/prod/server-A.xml:/etc/clickhouse-server/config.d/prod-server-tier.xml:ro
+  - ./cfg/prod/users.xml:/etc/clickhouse-server/users.d/prod-users.xml:ro
+  - ./cfg/prod/users-A.xml:/etc/clickhouse-server/users.d/prod-users-tier.xml:ro
+
+services:
+  keeper:
+    image: clickhouse/clickhouse-keeper:25.8
+    container_name: ch-keeper
+    volumes:
+      - ./cfg/keeper.xml:/etc/clickhouse-keeper/keeper_config.xml:ro
+
+  ch1:
+    image: clickhouse/clickhouse-server:25.8
+    container_name: ch1
+    hostname: ch1
+    depends_on: [keeper]
+    cpus: 4
+    mem_limit: 16g
+    ulimits: {nofile: {soft: 262144, hard: 262144}}
+    environment: [CLICKHOUSE_SKIP_USER_SETUP=1]
+    volumes:
+      - ./cfg/macros-ch1.xml:/etc/clickhouse-server/config.d/macros.xml:ro
+      - ./cfg/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ./cfg/keeper_map.xml:/etc/clickhouse-server/config.d/keeper_map.xml:ro
+      - ./cfg/prod/server.xml:/etc/clickhouse-server/config.d/prod-server.xml:ro
+      - ./cfg/prod/server-A.xml:/etc/clickhouse-server/config.d/prod-server-tier.xml:ro
+      - ./cfg/prod/users.xml:/etc/clickhouse-server/users.d/prod-users.xml:ro
+      - ./cfg/prod/users-A.xml:/etc/clickhouse-server/users.d/prod-users-tier.xml:ro
+    ports: ["18123:8123"]
+
+  ch2:
+    image: clickhouse/clickhouse-server:25.8
+    container_name: ch2
+    hostname: ch2
+    depends_on: [keeper]
+    cpus: 4
+    mem_limit: 16g
+    ulimits: {nofile: {soft: 262144, hard: 262144}}
+    environment: [CLICKHOUSE_SKIP_USER_SETUP=1]
+    volumes:
+      - ./cfg/macros-ch2.xml:/etc/clickhouse-server/config.d/macros.xml:ro
+      - ./cfg/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ./cfg/keeper_map.xml:/etc/clickhouse-server/config.d/keeper_map.xml:ro
+      - ./cfg/prod/server.xml:/etc/clickhouse-server/config.d/prod-server.xml:ro
+      - ./cfg/prod/server-A.xml:/etc/clickhouse-server/config.d/prod-server-tier.xml:ro
+      - ./cfg/prod/users.xml:/etc/clickhouse-server/users.d/prod-users.xml:ro
+      - ./cfg/prod/users-A.xml:/etc/clickhouse-server/users.d/prod-users-tier.xml:ro
+    ports: ["18124:8123"]
+
+  ch3:
+    image: clickhouse/clickhouse-server:25.8
+    container_name: ch3
+    hostname: ch3
+    depends_on: [keeper]
+    cpus: 4
+    mem_limit: 16g
+    ulimits: {nofile: {soft: 262144, hard: 262144}}
+    environment: [CLICKHOUSE_SKIP_USER_SETUP=1]
+    volumes:
+      - ./cfg/macros-ch3.xml:/etc/clickhouse-server/config.d/macros.xml:ro
+      - ./cfg/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ./cfg/keeper_map.xml:/etc/clickhouse-server/config.d/keeper_map.xml:ro
+      - ./cfg/prod/server.xml:/etc/clickhouse-server/config.d/prod-server.xml:ro
+      - ./cfg/prod/server-A.xml:/etc/clickhouse-server/config.d/prod-server-tier.xml:ro
+      - ./cfg/prod/users.xml:/etc/clickhouse-server/users.d/prod-users.xml:ro
+      - ./cfg/prod/users-A.xml:/etc/clickhouse-server/users.d/prod-users-tier.xml:ro
+    ports: ["18125:8123"]

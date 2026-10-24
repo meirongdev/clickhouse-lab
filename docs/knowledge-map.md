@@ -172,6 +172,6 @@ bash experiments/28-zk-sequential-overflow.sh        # 演示 ZooKeeper 2^31-1 �
 | 类别 | 状态 | 说明与入口 |
 |---|---|---|
 | **ClickHouse 25.3 + Kafka Connect 1.3.9 的机制与 SQL Runbook** | **已闭环（lab 实测）** | 实验 `01`–`29`（除待建的 `15`、`22` 外共 27 个脚本、455 条断言全部通过，见 [Test-Report.md](Test-Report.md)）。 |
-| **单日两亿至三亿行宽表的生产量级耗时、内存与磁盘峰值** | **待跑规模实验** | 宿主机（18 核 / 128 GiB，OrbStack 100 GiB）已就绪，计划见 [plan-scale-dedup.md](plan-scale-dedup.md)（待建实验 15、22）与 [follow-ups.md](follow-ups.md#一在-mac-studio128-gb上做的规模验证)。 |
+| **单日两亿至三亿行宽表的生产量级耗时、内存与磁盘峰值（3 节点 4c16gb 25.8 阶梯压测）** | **已闭环（lab 实测）** | 实验 30（`experiments/30-scale-25.8-stepped-stress-test.sh`）在 4c16gb 生产限制下完成 10M 至 3 亿行实测，量化了 Merge 算力争抢、磁盘瞬时峰值与 2.2 亿行处 OOM 熔断，完整报告见 [scale-300m-stepped-stress-test.md](scale-300m-stepped-stress-test.md)。 |
 | **对象存储（S3 冷层）上的 `ATTACH` / `REPLACE` 是否零拷贝** | **待挂 MinIO 验证** | 本地盘已由实验 20 证走硬链接；对象存储冷层计划见 [plan-scale-dedup.md](plan-scale-dedup.md) 的 P6。 |
 | **托管平台控制面行为（RBAC 收敛、账号拆分、网络白名单、控制面开关）** | **不在本仓库范围** | 属于生产环境治理与平台配置核对，只读核对 SQL 见 [production-shape.md 第八节](production-shape.md#八还缺的生产数据怎么只读地拿) 与 [dedup-solution.md 第六节](dedup-solution.md#v-c-生产只读核对不改任何东西)。 |

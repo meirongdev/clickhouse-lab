@@ -1,0 +1,24 @@
+# Single-node ClickHouse 25.8 Scale Test
+# Limits: 16 vCPU / 64 GB RAM (Aiven Tier C business-64 profile)
+# Config: Production Tier C settings (cfg/prod/server.xml, server-C.xml, users.xml, users-C.xml)
+
+services:
+  ch-16c64g:
+    image: clickhouse/clickhouse-server:25.8
+    container_name: ch-16c64g
+    hostname: ch-16c64g
+    cpus: 16
+    mem_limit: 64g
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    environment:
+      - CLICKHOUSE_SKIP_USER_SETUP=1
+    volumes:
+      - ./cfg/prod/server.xml:/etc/clickhouse-server/config.d/prod-server.xml:ro
+      - ./cfg/prod/server-C.xml:/etc/clickhouse-server/config.d/prod-server-tier.xml:ro
+      - ./cfg/prod/users.xml:/etc/clickhouse-server/users.d/prod-users.xml:ro
+      - ./cfg/prod/users-C.xml:/etc/clickhouse-server/users.d/prod-users-tier.xml:ro
+    ports:
+      - "18123:8123"

@@ -135,7 +135,22 @@ flowchart TD
 
 ---
 
-## 5. 最终生产规格决策矩阵
+## 5. 单节点 vs 3 节点实测同口径对比（4c16g 实验 30 vs 实验 33）
+
+为了消除拓扑与主机资源争抢的偏差，我们针对 4c16g 规格分别在 **3 节点集群（实验 30）** 与 **单节点形态（实验 33）** 执行了同结构、同数据、同参数的严格同口径对照：
+
+| 压测指标项 (3 亿行巅峰) | 4c16gb 3 节点集群 (实验 30) | 4c16gb 单节点形态 (实验 33) | 拓扑差异原因剖析 |
+| :--- | :--- | :--- | :--- |
+| **单日写入综合吞吐** | 436k 行/秒 (暴跌 78.2%) | **1.49M 行/秒** (平稳) | **宿主机竞争与网络开销**：单机宿主运行 3 节点时，3 份数据落盘与 Keeper 同步加剧了本地 I/O 争抢；单节点去除了跨副本网络与多份写盘开销，吞吐提升 3.4 倍。 |
+| **Active Parts (未合并碎片)** | 42 个 | **34 个** | 单节点后台合并更聚焦于本地 Part。 |
+| **Q2 count() FINAL (合并活跃期)** | 69.49 秒 (152.5 MiB) | **19.07 秒 (149.1 MiB)** | 3 节点在宿主 CPU 密集争抢下多路归并耗时增加。 |
+| **Q2 count() FINAL (合并静默期)** | 未重测 | **5.13 秒 ~ 7.12 秒** | **噪声评估**：待后台重型合并完成后再次复测，耗时缩短 73%，表明查询极易受并发后台 Merge 争抢影响。 |
+| **Q3 tenant_id=5 过滤 FINAL** | 27.07 秒 (125.4 MiB) | **7.36 秒 (152.7 MiB)** | 单节点独立 4 核执行过滤速度明显优于 3 节点单机争抢态。 |
+| **Q5 count(DISTINCT id) 去重** | ❌ OOM 强杀 (超 9.94 GiB) | ❌ **OOM 强杀 (Code: 241)**<br>(扫描至 2.46 亿行触顶 9.13 GiB 熔断) | **物理边界完全一致**：无论单节点还是 3 节点，单机内存上限均为 9.94 GiB，3 亿行精确去重无法在 16 GB 内存下运行。 |
+
+---
+
+## 6. 最终生产规格决策矩阵
 
 ```mermaid
 graph LR
@@ -160,12 +175,17 @@ graph LR
 2. **单日 1 亿 ~ 3 亿行**：选用 **8c32gb (`business-32`)** 是**最稳妥的安全基准线**。写入平稳、Part 无积压，去重耗时 17s，性价比极佳。
 3. **单日 3 亿行 + 高并发报表 / 实时重型分析**：强烈推荐 **16c64gb (`business-64`)**。彻底打破内存警戒线，留出 25 GiB 充沛缓冲池，查询耗时由十秒级压入 2~6 秒交互式响应。
 
+> 进一步的表结构精简（UUID / Decimal64）、PROJECTION 局部投影、归档自动免去重及 26.x LTS 归并重构红利，详见专项优化指南：[docs/scale-300m-optimization-recommendations.md](scale-300m-optimization-recommendations.md)。
+
 ---
 
-## 6. 压测脚本与原始结果存证
-- **4c16gb 压测脚本**: [experiments/30-scale-25.8-stepped-stress-test.sh](file:///Users/matstudio/projects/meirongdev/clickhouse-lab/experiments/30-scale-25.8-stepped-stress-test.sh)
-- **4c16gb 原始日志**: [results/30-scale-25.8-stepped-stress-test.log](file:///Users/matstudio/projects/meirongdev/clickhouse-lab/results/30-scale-25.8-stepped-stress-test.log)
-- **8c32gb 压测脚本**: [experiments/31-scale-8c32g-single-node.sh](file:///Users/matstudio/projects/meirongdev/clickhouse-lab/experiments/31-scale-8c32g-single-node.sh)
-- **8c32gb 原始日志**: [results/31-scale-8c32g-single-node.log](file:///Users/matstudio/projects/meirongdev/clickhouse-lab/results/31-scale-8c32g-single-node.log)
-- **16c64gb 压测脚本**: [experiments/32-scale-16c64g-single-node.sh](file:///Users/matstudio/projects/meirongdev/clickhouse-lab/experiments/32-scale-16c64g-single-node.sh)
-- **16c64gb 原始日志**: [results/32-scale-16c64g-single-node.log](file:///Users/matstudio/projects/meirongdev/clickhouse-lab/results/32-scale-16c64g-single-node.log)
+## 7. 压测脚本与原始结果存证
+- **4c16gb (3 节点) 压测脚本**: [experiments/30-scale-25.8-stepped-stress-test.sh](file:///Users/matstudio/projects/meirongdev/clickhouse-lab/experiments/30-scale-25.8-stepped-stress-test.sh)
+- **4c16gb (3 节点) 原始日志**: [results/30-scale-25.8-stepped-stress-test.log](file:///Users/matstudio/projects/meirongdev/clickhouse-lab/results/30-scale-25.8-stepped-stress-test.log)
+- **4c16gb (单节点) 压测脚本**: [experiments/33-scale-4c16g-single-node.sh](file:///Users/matstudio/projects/meirongdev/clickhouse-lab/experiments/33-scale-4c16g-single-node.sh)
+- **4c16gb (单节点) 原始日志**: [results/33-scale-4c16g-single-node.log](file:///Users/matstudio/projects/meirongdev/clickhouse-lab/results/33-scale-4c16g-single-node.log)
+- **8c32gb (单节点) 压测脚本**: [experiments/31-scale-8c32g-single-node.sh](file:///Users/matstudio/projects/meirongdev/clickhouse-lab/experiments/31-scale-8c32g-single-node.sh)
+- **8c32gb (单节点) 原始日志**: [results/31-scale-8c32g-single-node.log](file:///Users/matstudio/projects/meirongdev/clickhouse-lab/results/31-scale-8c32g-single-node.log)
+- **16c64gb (单节点) 压测脚本**: [experiments/32-scale-16c64g-single-node.sh](file:///Users/matstudio/projects/meirongdev/clickhouse-lab/experiments/32-scale-16c64g-single-node.sh)
+- **16c64gb (单节点) 原始日志**: [results/32-scale-16c64g-single-node.log](file:///Users/matstudio/projects/meirongdev/clickhouse-lab/results/32-scale-16c64g-single-node.log)
+- **优化建议与演进路线**: [docs/scale-300m-optimization-recommendations.md](file:///Users/matstudio/projects/meirongdev/clickhouse-lab/docs/scale-300m-optimization-recommendations.md)

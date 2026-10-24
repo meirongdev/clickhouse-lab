@@ -1,0 +1,25 @@
+# 单节点 ClickHouse 25.8，用于与 3 节点 4c16gb 集群（docker-compose.scale-25.8.yml，实验 30）同口径对照
+# 限额：4 vCPU / 16 GB（Aiven Tier A business-16 的单个节点规格）
+# 配置：生产 A 档（cfg/prod/server.xml、server-A.xml、users.xml、users-A.xml），与实验 30 每个节点相同
+# 用法：docker compose -f docker-compose.scale-4c16g-single.yml up -d && bash experiments/33-scale-4c16g-single-node.sh
+
+services:
+  ch-4c16g:
+    image: clickhouse/clickhouse-server:25.8
+    container_name: ch-4c16g
+    hostname: ch-4c16g
+    cpus: 4
+    mem_limit: 16g
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    environment:
+      - CLICKHOUSE_SKIP_USER_SETUP=1
+    volumes:
+      - ./cfg/prod/server.xml:/etc/clickhouse-server/config.d/prod-server.xml:ro
+      - ./cfg/prod/server-A.xml:/etc/clickhouse-server/config.d/prod-server-tier.xml:ro
+      - ./cfg/prod/users.xml:/etc/clickhouse-server/users.d/prod-users.xml:ro
+      - ./cfg/prod/users-A.xml:/etc/clickhouse-server/users.d/prod-users-tier.xml:ro
+    ports:
+      - "18123:8123"

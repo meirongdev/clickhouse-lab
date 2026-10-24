@@ -12,6 +12,7 @@
 | 场景 | 实验结论 | 实验 | 方案文档 |
 |---|---|---|---|
 | 重复行从哪来，去重窗口拦得住多少 | Keeper 卡住时，客户端超时、服务端晚到提交，Connect 原样重投；窗口在就拦下，窗口被裁掉就第二份落地；裁剪周期是自适应的 | 02、03、12、21 | [mechanism-map.md](mechanism-map.md)、[data-problems.md](data-problems.md) |
+| 高频小批写入改服务端异步插入与 token 去重 | 25.3 `async_insert_deduplicate` 默认 0，只开 `async_insert = 1` 会只记桶内第 1 条 token，导致后续子插入重投漏拦且重投建桶时静默吞掉同批新数；开齐 `async_insert = 1, wait_for_async_insert = 1, async_insert_deduplicate = 1` 并经 HTTP 参数传 token 时，20 条并发小插入合成 1 个 part、token 各自进 `async_blocks/`（默认窗口 10000）、坏子插入单条隔离回滚；同步 `blocks/` 与异步 `async_blocks/` 互不查对方 | 29 | [dedup-solution.md](dedup-solution.md)、[mechanism-map.md](mechanism-map.md) |
 | sink 的 `exactlyOnce` 和错误处理 | `exactlyOnce` 拦不住同一批原样重投，打开之后崩溃重启默认会停在 `State MISMATCH`；`errors.tolerance=all` 不配 DLQ 会静默丢整批 | 09、21、23 | [dedup-solution.md](dedup-solution.md) 第二节 |
 | 明细表去重 | `ReplacingMergeTree` + `FINAL` 能折掉三种重复；`FINAL` 的代价随查询形状和重叠范围变，比手写去重省一个数量级以上的内存 | 14、25、27 | [dedup-solution.md](dedup-solution.md) M4 |
 | 清理已经写进去的重复行 | 方案原文的语法、列序、时机、多副本问题；改过的 runbook 每道闸都能拦下对应的情形，回滚逐行一致；快照和换分区都是硬链接 | 16–20 | [review-dedup-replace-plan.md](review-dedup-replace-plan.md) |
@@ -41,7 +42,7 @@
 
 <!-- results:begin（这一段由 ./report.sh 从 results/ 生成，别手改） -->
 
-出处：2026-10-11 00:23:41 到 2026-10-14 21:58:36 跑的；lab `d5a651e`（实验 01、02、03、04、05、06、07、08、09、10、11、12、13、14、16、17、18、19、20、21、23、24、25、26、27）；`576fccb+改动`（实验 28）；SLOW=1（实验 01、02、03、04、05、06、07、08、09、10、11、12、13、14、16、17、18、19、20、21、23、24、25、26、27）；没带 SLOW=1（实验 28）；机器 Apple M2 Pro（12 核 / 32 GiB），Docker 12 CPU / 15.7 GiB（实验 01、02、03、04、05、06、07、08、09、10、11、12、13、14、16、17、18、19、20、21、23、24、25、26、27）；Apple M5（10 核 / 32 GiB），Docker 10 CPU / 15.7 GiB（实验 28）。
+出处：2026-10-11 00:23:41 到 2026-10-24 20:46:58 跑的；lab `d5a651e`（实验 01、02、03、04、05、06、07、08、09、10、11、12、13、14、16、18、20、21、23、24、25、26、27）；`4171c7c+改动`（实验 17、19、29）；`576fccb+改动`（实验 28）；SLOW=1（实验 01、02、03、04、05、06、07、08、09、10、11、12、13、14、16、17、18、19、20、21、23、24、25、26、27、29）；没带 SLOW=1（实验 28）；机器 Apple M2 Pro（12 核 / 32 GiB），Docker 12 CPU / 15.7 GiB（实验 01、02、03、04、05、06、07、08、09、10、11、12、13、14、16、18、20、21、23、24、25、26、27）；Apple M5 Max（18 核 / 128 GiB），Docker 18 CPU / 98.1 GiB（实验 17、19、29）；Apple M5（10 核 / 32 GiB），Docker 10 CPU / 15.7 GiB（实验 28）。
 
 | # | 验的是什么 | 符合 | 不符 | 退出码 |
 |---|---|---|---|---|
@@ -60,9 +61,9 @@
 | 13 | 误删之后能救回什么 | 28 | 0 | 0 |
 | 14 | ReplacingMergeTree + FINAL 的代价 | 16 | 0 | 0 |
 | 16 | 清理方案原文逐条跑 | 25 | 0 | 0 |
-| 17 | 换分区的时机与多副本 | 20 | 0 | 0 |
+| 17 | 换分区的时机与多副本 | 24 | 0 | 0 |
 | 18 | 按 _part_offset 的轻量删除 | 25 | 0 | 0 |
-| 19 | 改过的 REPLACE runbook 整套跑 | 25 | 0 | 0 |
+| 19 | 改过的 REPLACE runbook 整套跑 | 30 | 0 | 0 |
 | 20 | ATTACH / REPLACE PARTITION 走硬链接 | 12 | 0 | 0 |
 | 21 | Connect 超时重投与 exactlyOnce | 19 | 0 | 0 |
 | 23 | exactlyOnce 的状态对不上时 | 23 | 0 | 0 |
@@ -71,8 +72,9 @@
 | 26 | 大查询限 max_threads 的效果与代价 | 10 | 0 | 0 |
 | 27 | 引擎迁移：ATTACH + EXCHANGE，在线、可回滚 | 28 | 0 | 0 |
 | 28 | ZooKeeper 顺序节点计数器到顶，复制表写不进去 | 27 | 0 | 0 |
+| 29 | 异步插入与 insert_deduplication_token 联用及边界 | 18 | 0 | 0 |
 
-26 个实验，26 个退出码为 0 且没有不符；断言合计 431 条符合、0 条不符。
+27 个实验，27 个退出码为 0 且没有不符；断言合计 458 条符合、0 条不符。
 出处取自每份日志的第一行，退出码取自最后一行（run-all.sh 写的，「没记」说明不是它跑的或者跑到一半断了）。耗时、用了几个核这类数字只在同一台机器的日志之间能比。
 
 <!-- results:end -->

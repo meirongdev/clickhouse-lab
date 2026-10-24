@@ -96,18 +96,22 @@ ClickHouse 不提供「只写一次」的开关。官方和社区的主流做法
   - 设成 1 之后，物化视图往**目标表**写的块由目标表自己做去重检查：目标表的窗口裁掉了那一批，源表拦下了、物化视图照样多算。所以目标表的 `replicated_deduplication_window` 也要按 M2 调大，不能比源表小（lab 实测，实验 24 五）。
   - 设置说明里写了默认值为 0 的原因：不同的源插入聚合出来可能是一模一样的块，按数据哈希去重会误删。25.3 上不会：两个不同的源批次聚合出一模一样的块，设成 1 也都算进去了，带不带 token 都一样（lab 实测，实验 24 四）。
   - 要对所有写入一律生效：首写用 0、重投用 1，照样双算（lab 实测，实验 24 三）。
-  - 不能和 `async_insert` 一起开：两个都开时 INSERT 直接报 `Code: 344`（lab 实测，实验 24 七；由 `throw_if_deduplication_in_dependent_materialized_views_enabled_with_async_insert` 控制，默认 1，已核 [Settings.cpp:3665](https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Core/Settings.cpp#L3665)）。connector 默认 `async_insert=0`（已核 [ClickHouseSinkConfig.java:227](https://github.com/ClickHouse/clickhouse-kafka-connect/blob/v1.3.9/src/main/java/com/clickhouse/kafka/connect/sink/ClickHouseSinkConfig.java#L227)），别在 `clickhouseSettings` 里打开它。
-- **前提（待核）：** 生产的下游聚合是物化视图喂的，而不是定时跑的 `INSERT … SELECT`。如果是定时作业，这一项没用，聚合读的是明细表里已经存在的重复，见 M5。
+  - 不能和 `async_insert` 一起开：两个都开时 INSERT 直接报 `Code: 344`（lab 实测，实验 24 七；由 `throw_if_deduplication_in_dependent_materialized_views_enabled_with_async_insert` 控制，默认 1，已核 [Settings.cpp:3665](https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Core/Settings.cpp#L3665)）。connector 默认 `async_insert=0`（已核 [ClickHouseSinkConfig.java:227](https://github.com/ClickHouse/clickhouse-kafka-connect/blob/v1.3.9/src/main/java/com/clickhouse/kafka/connect/sink/ClickHouseSinkConfig.java#L227)）。
+- **前提（待核）：** 生产的下游聚合是物化视图喂的，而不是定时跑的 `INSERT … SELECT`。如果是外部定时作业（源表上根本没有 ClickHouse 物化视图），则不需要开 M1，反而可以给写入账号开服务端异步插入（`async_insert = 1, wait_for_async_insert = 1, async_insert_deduplicate = 1`）把每秒上百次小 INSERT 攒成大 part（lab 实测，实验 29，见 M2 补充）。
 
-### M2：把去重窗口调到盖得住一轮重投
+### M2：把去重窗口调到盖得住一轮重投（或配合服务端异步插入攒批减压）
 
-`ALTER TABLE events_wide MODIFY SETTING replicated_deduplication_window = …`。M1 打开的话，物化视图的目标表也一起调，不能比明细表小（lab 实测，实验 24 五）。
+`ALTER TABLE events_wide MODIFY SETTING replicated_deduplication_window = …`。M1 打开的话，物化视图的目标表也一起调，不能比明细表小（lab 实测，实验 24 五）。若源表没有挂载物化视图，可同时或优先给写入账号开启服务端异步插入：`ALTER USER … SETTINGS async_insert = 1, wait_for_async_insert = 1, async_insert_deduplicate = 1`（lab 实测，实验 29）。
 
 - **依据：** 窗口要不小于「建块速率 × 最长重投间隔」（实验 02 的机制）。
   - 一轮重投最长约 90 秒（30 秒超时，加上等到下一个 offset 提交点，实验 21 实测约 55 秒）；生产上见过 124 秒，即两轮。
   - B 档每秒约 124 个块：124 × 124 ≈ 1.5 万，建议 **2 万**。
   - C 档每秒约 40 个块：40 × 124 ≈ 5000，建议 **1 万**（推断，速率见 production-shape.md 第五节）。
   - 上游 25.9 的新默认值 1 万，对 B 档仍然不够。
+  - **服务端异步插入与 token 联用（lab 实测，实验 29）：**
+    - 必须同时开齐 `async_insert = 1, wait_for_async_insert = 1, async_insert_deduplicate = 1`。25.3 的 `async_insert_deduplicate` 默认 `0`：如果只开 `async_insert = 1`，同一个刷新桶只保留第 1 条子插入的 token 写进 `blocks/`，第 2..N 条子插入的 token 被丢弃（重投漏拦），且当重投的第 1 条子插入建桶时，同批搭车的全新子插入会被整批判为已去重而静默吞掉！
+    - 开齐三项后，通过 HTTP 参数传来的每个子插入 token 各自写进 Keeper 的 `async_blocks/<partition>_<token>`，窗口由 `replicated_deduplication_window_for_async_inserts`（25.3 默认 **10000**，是同步窗口的 10 倍）控制；20 条并发小插入可合成 1 个 part、只占 1 条复制日志；同一批次中某条子插入解析报错只回滚它自己，不影响同批其它子插入。
+    - 切换注意：同步写 `blocks/`、异步写 `async_blocks/`，两边互不查对方；切换用户级开关时应选在无重投积压的平稳窗口。
 - **管什么：** 只管 sink 超时重投，也就是生产里那两百多行的形状。重放和 producer 重复的 token 不同，窗口再大也认不出来。
 - **代价：**
   - Keeper 里每张表多存这么多个块节点，裁剪线程每轮多删这么多（推断，V5 量）。

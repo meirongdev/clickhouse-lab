@@ -1,21 +1,20 @@
 #!/usr/bin/env bash
 # 断言（docs/review-dedup-replace-plan.md 里「改过的 runbook」）：
 #   保留原方案「临时表 + REPLACE PARTITION」的路子，把实验 16、17 里的坑逐条堵上：
-#     R0 只读前置：三个副本当天行数相等、全副本复制队列为空、没有未完成的 mutation
-#     R1 快照：CREATE TABLE … AS + ATTACH PARTITION ID … FROM（硬链接），记下快照时刻
-#     R2 重复键固化成一张小表，闸：组数 / 多余行数 = 预期，每组业务列哈希数 = 1（哈希包 tuple）
-#     R3 从快照（不是线上表）建去重后的分区：不在重复键里的 SELECT * 原样拷；重复键 ORDER BY create_time LIMIT 1 BY
-#        闸：行数 = 快照 − 多余行数，键数 = 快照键数，没有重复键
-#     R4 换分区前一刻：三个副本的当天行数都必须等于快照行数，并且全副本复制队列为空。
-#        只数当前节点不够——别的副本上刚写进来、还没复制过来的 part，REPLACE_RANGE 照样会把它一起抹掉
-#        （实验 17 B 的机制）。早期版本的 R4 只数当前节点，而本实验第 3 段注入写入之后先在执行节点上
-#        SYNC 了一次，等于替 R4 把「复制已经追上」这个前提补上了，所以没测出这个洞；第 3b 段专门补这一种。
-#     R5 REPLACE PARTITION ID，记下换分区时刻
-#     R6 事后：clusterAllReplicas 每个副本行数和重复键、全副本复制队列、
+#     R0 只读前置：三个副本当天行数相等、目标分区的非合并复制队列为空、没有未完成的 mutation
+#     R1 快照：CREATE TABLE … AS + ATTACH PARTITION ID … FROM（硬链接，带 alter_sync = 2），记下快照时刻
+#     R2 重复键固化成一张小表（带 insert_quorum = 3），闸：组数 / 多余行数 = 预期，每组业务列哈希数 = 1（哈希包 tuple）
+#     R3 从快照（不是线上表）建去重后的分区（带 insert_quorum = 3）：不在重复键里的 SELECT * 原样拷；
+#        重复键 ORDER BY create_time LIMIT 1 BY。闸：行数 = 快照 − 多余行数，键数 = 快照键数，没有重复键
+#     R4 换分区前一刻：线上表、dedup 表、bak 表在三个副本上的当天行数都必须各自等于 C0、C0−D、C0，
+#        并且目标分区的非合并复制队列为空。只数当前节点不够（实验 19 第 3b 段）；不核 dedup 全副本行数，
+#        随机落点下换分区落到还没拉到 dedup 的副本会把三个副本一起清空（实验 17 D）。
+#     R5 REPLACE PARTITION ID（带 alter_sync = 2），记下换分区时刻
+#     R6 事后：clusterAllReplicas 每个副本行数和重复键、目标分区的非合并复制队列、
 #        part_log 里「快照之后、换分区之前」这个分区有没有 error = 0 的 NewPart（有 = 有写入被抹掉；
 #        被块级去重拦下的重投也记 NewPart，但 error = 389，不算）
-#     R7 回滚：REPLACE PARTITION ID … FROM 快照表
-#   这里先完整跑一遍对的情形，再把实验 17 的三种时机问题注进来，看哪一道闸拦下。
+#     R7 回滚：REPLACE PARTITION ID … FROM 快照表（带 alter_sync = 2）
+#   这里先完整跑一遍对的情形，再把实验 17 的四种时机与多副本问题注进来，看哪一道闸拦下。
 #   最后量一下方案说的「几毫秒」：换分区那一条和重建那几条各花多久。
 #
 # 参考（方案设计依据。源码链接钉在 tag 上，行号只对那个 tag 成立；文档链接是当前版本的文档，和 25.3 有出入时以源码和实测为准）：
@@ -72,12 +71,24 @@ extra() {
 }
 
 # ---------------- runbook 本体，SQL 和给生产的版本一一对应 ----------------
-R0() {  # 回显 "<三个副本行数>|<全副本队列条数>|<未完成 mutation 数>"
+per_replica_t() {
+  q1 "SELECT arrayStringConcat(groupArray(toString(c)), ',') FROM (
+      SELECT h, count() - 1 AS c FROM (
+        SELECT hostName() AS h FROM clusterAllReplicas('default', system.one)
+        UNION ALL
+        SELECT hostName() AS h FROM clusterAllReplicas('default', currentDatabase(), $1) WHERE _partition_id = '$PID'
+      ) GROUP BY h ORDER BY h)" | tr -d '\n'
+}
+part_queue() {
+  q1 "SELECT count() FROM clusterAllReplicas('default', system.replication_queue)
+      WHERE database = currentDatabase() AND table = '$T'
+        AND type NOT IN ('MERGE_PARTS', 'MUTATE_PART')
+        AND (new_part_name = '' OR startsWith(new_part_name, '${PID}_'))" | tr -d '\n'
+}
+R0() {  # 回显 "<三个副本行数>|<目标分区非合并队列条数>|<未完成 mutation 数>"
   local per queue mut
-  per=$(q1 "SELECT arrayStringConcat(groupArray(toString(c)), ',') FROM (SELECT hostName() AS h, count() AS c
-            FROM clusterAllReplicas('default', currentDatabase(), $T) WHERE _partition_id = '$PID' GROUP BY h ORDER BY h)" | tr -d '\n')
-  queue=$(q1 "SELECT count() FROM clusterAllReplicas('default', system.replication_queue)
-              WHERE database = currentDatabase() AND table = '$T'" | tr -d '\n')
+  per=$(per_replica_t "$T")
+  queue=$(part_queue)
   mut=$(q1 "SELECT count() FROM system.mutations WHERE database = currentDatabase() AND table = '$T' AND NOT is_done" | tr -d '\n')
   echo "$per|$queue|$mut"
 }
@@ -89,16 +100,15 @@ R0_ok() {  # 三个副本行数相同、队列空、没有未完成 mutation 才
 R1() {
   T_SNAP=$(q1 "SELECT now64(6)" | tr -d '\n')
   q1 "CREATE TABLE ${T}_bak ON CLUSTER default AS $T" >/dev/null
-  q1 "ALTER TABLE ${T}_bak ATTACH PARTITION ID '$PID' FROM $T"
-  q1 "SYSTEM SYNC REPLICA ${T}_bak" >/dev/null
+  q1 "ALTER TABLE ${T}_bak ATTACH PARTITION ID '$PID' FROM $T SETTINGS alter_sync = 2"
   C0=$(q1 "SELECT count() FROM ${T}_bak WHERE _partition_id = '$PID'" | tr -d '\n')
 }
 R2() {
   q1 "CREATE TABLE ${T}_dupkeys ON CLUSTER default (id String, settle_ms UInt64, rev UInt16)
       ENGINE = ReplicatedMergeTree('/ch/tables/{uuid}/${T}_dupkeys', '{replica}') ORDER BY (settle_ms, id, rev)" >/dev/null
-  q1 "INSERT INTO ${T}_dupkeys SELECT id, settle_ms, rev FROM ${T}_bak WHERE _partition_id = '$PID'
+  q1 "INSERT INTO ${T}_dupkeys SETTINGS insert_quorum = 3
+      SELECT id, settle_ms, rev FROM ${T}_bak WHERE _partition_id = '$PID'
       GROUP BY id, settle_ms, rev HAVING count() > 1"
-  q1 "SYSTEM SYNC REPLICA ${T}_dupkeys" >/dev/null
 }
 G2_extra()  { q1 "SELECT sum(c - 1) FROM (SELECT count() AS c FROM ${T}_bak WHERE _partition_id = '$PID'
                   AND (id, settle_ms, rev) IN (SELECT id, settle_ms, rev FROM ${T}_dupkeys) GROUP BY id, settle_ms, rev)"; }
@@ -106,48 +116,46 @@ G2_hash()   { q1 "SELECT count() FROM (SELECT uniqExact(cityHash64(tuple($BIZ)))
                   AND (id, settle_ms, rev) IN (SELECT id, settle_ms, rev FROM ${T}_dupkeys) GROUP BY id, settle_ms, rev HAVING h > 1)"; }
 R3() {
   q1 "CREATE TABLE ${T}_dedup ON CLUSTER default AS $T" >/dev/null
-  q1 "INSERT INTO ${T}_dedup SELECT * FROM ${T}_bak WHERE _partition_id = '$PID'
+  q1 "INSERT INTO ${T}_dedup SETTINGS insert_quorum = 3
+      SELECT * FROM ${T}_bak WHERE _partition_id = '$PID'
         AND (id, settle_ms, rev) NOT IN (SELECT id, settle_ms, rev FROM ${T}_dupkeys)"
-  q1 "INSERT INTO ${T}_dedup SELECT * FROM ${T}_bak WHERE _partition_id = '$PID'
+  q1 "INSERT INTO ${T}_dedup SETTINGS insert_quorum = 3
+      SELECT * FROM ${T}_bak WHERE _partition_id = '$PID'
         AND (id, settle_ms, rev) IN (SELECT id, settle_ms, rev FROM ${T}_dupkeys)
       ORDER BY create_time LIMIT 1 BY id, settle_ms, rev"
-  q1 "SYSTEM SYNC REPLICA ${T}_dedup" >/dev/null
 }
 G3() {  # 回显 "<去重后行数>,<去重后键数>,<快照键数>"
   q1 "SELECT concat(toString(count()), ',', toString(uniqExact(id, settle_ms, rev)), ',',
              toString((SELECT uniqExact(id, settle_ms, rev) FROM ${T}_bak WHERE _partition_id = '$PID')))
       FROM ${T}_dedup WHERE _partition_id = '$PID'"
 }
-# G4：R4 的闸。回显「三个副本当天行数（按 ch1,ch2,ch3）|全副本复制队列条数」，过闸的样子是「C0,C0,C0|0」
+# G4：R4 的闸。回显「线上三副本行数|dedup三副本行数|bak三副本行数|目标分区非合并队列条数」
 G4() {
-  local per queue
-  per=$(q1 "SELECT arrayStringConcat(groupArray(toString(c)), ',') FROM (SELECT hostName() AS h, count() AS c
-            FROM clusterAllReplicas('default', currentDatabase(), $T) WHERE _partition_id = '$PID' GROUP BY h ORDER BY h)" | tr -d '\n')
-  queue=$(q1 "SELECT count() FROM clusterAllReplicas('default', system.replication_queue)
-              WHERE database = currentDatabase() AND table = '$T'" | tr -d '\n')
-  echo "$per|$queue"
+  echo "$(per_replica_t "$T")|$(per_replica_t "${T}_dedup")|$(per_replica_t "${T}_bak")|$(part_queue)"
 }
+G4_expect() { echo "$C0,$C0,$C0|$((C0 - D)),$((C0 - D)),$((C0 - D))|$C0,$C0,$C0|0"; }
 G4_local() { q1 "SELECT count() FROM $T WHERE _partition_id = '$PID'" | tr -d '\n'; }   # 改之前的 R4：只数当前节点
 R5() {
   T_SWAP=$(q1 "SELECT now64(6)" | tr -d '\n')
-  q1 "ALTER TABLE $T REPLACE PARTITION ID '$PID' FROM ${T}_dedup"
-  [ "${R5_SKIP_SYNC:-0}" = "1" ] && return 0   # 3b 段 ch1 停着拉取，SYNC 会等不完
-  for n in 1 2 3; do qn $n "SYSTEM SYNC REPLICA $T" >/dev/null; done
+  if [ "${R5_SKIP_SYNC:-0}" = "1" ]; then
+    q1 "ALTER TABLE $T REPLACE PARTITION ID '$PID' FROM ${T}_dedup SETTINGS alter_sync = 1"
+    return 0
+  fi
+  q1 "ALTER TABLE $T REPLACE PARTITION ID '$PID' FROM ${T}_dedup SETTINGS alter_sync = 2"
 }
-R6() {  # 回显 "<每个副本 行数/重复键>|<全副本队列>|<快照到换分区之间的 NewPart 行数>"
+R6() {  # 回显 "<每个副本 行数/重复键>|<目标分区非合并队列>|<快照到换分区之间的 NewPart 行数>"
   local per queue lost
   per=$(q1 "SELECT arrayStringConcat(groupArray(concat(toString(c), '/', toString(d))), ',') FROM (
               SELECT hostName() AS h, count() AS c, count() - uniqExact(id, settle_ms, rev) AS d
               FROM clusterAllReplicas('default', currentDatabase(), $T) WHERE _partition_id = '$PID' GROUP BY h ORDER BY h)" | tr -d '\n')
-  queue=$(q1 "SELECT count() FROM clusterAllReplicas('default', system.replication_queue)
-              WHERE database = currentDatabase() AND table = '$T'" | tr -d '\n')
+  queue=$(part_queue)
   for n in 1 2 3; do qn $n "SYSTEM FLUSH LOGS" >/dev/null; done
   lost=$(q1 "SELECT sum(rows) FROM clusterAllReplicas('default', system.part_log)
              WHERE database = currentDatabase() AND table = '$T' AND partition_id = '$PID' AND event_type = 'NewPart'
                AND error = 0 AND event_time_microseconds >= '$T_SNAP' AND event_time_microseconds < '$T_SWAP'" | tr -d '\n')
   echo "$per|$queue|$lost"
 }
-R7() { q1 "ALTER TABLE $T REPLACE PARTITION ID '$PID' FROM ${T}_bak"; for n in 1 2 3; do qn $n "SYSTEM SYNC REPLICA $T" >/dev/null; done; }
+R7() { q1 "ALTER TABLE $T REPLACE PARTITION ID '$PID' FROM ${T}_bak SETTINGS alter_sync = 2"; }
 # ---------------- 标准答案 ----------------
 bad_rows()  { q1 "SELECT count() FROM (SELECT * FROM $T WHERE _partition_id = '$PID' EXCEPT ALL SELECT * FROM ${T}_ref WHERE _partition_id = '$PID')"; }
 lost_keys() { q1 "SELECT count() FROM (SELECT DISTINCT id, settle_ms, rev FROM ${T}_ref WHERE _partition_id = '$PID'
@@ -156,7 +164,7 @@ OK3="$N/0,$N/0,$N/0"
 
 section "1、对的情形：整套跑一遍"
 mk_load
-r0=$(R0); note "R0：三个副本行数|全副本队列|未完成 mutation = $r0"
+r0=$(R0); note "R0：三个副本行数|目标分区非合并队列|未完成 mutation = $r0"
 R0_ok "$r0" && echo "  [符合] R0 前置通过" || { echo "  [不符] R0 没过：$r0"; FAILED=1; }
 R1; expect "R1 快照行数 = 线上当天行数" "$C0" "$(G4_local)"
 R2
@@ -165,9 +173,9 @@ expect "R2 闸：多余行数" "$(G2_extra)" "$D"
 expect "R2 闸：业务列哈希数 > 1 的组" "$(G2_hash)" "0"
 R3
 expect "R3 闸：去重后行数,键数,快照键数" "$(G3)" "$((C0 - D)),$((C0 - D)),$((C0 - D))"
-expect "R4 闸：三个副本当天行数都 = 快照行数，全副本队列为空" "$(G4)" "$C0,$C0,$C0|0"
+expect "R4 闸：线上/dedup/bak 三副本行数齐全，目标分区非合并队列为空" "$(G4)" "$(G4_expect)"
 R5
-expect "R6：每个副本 行数/重复键 | 全副本队列 | 快照到换分区之间的 NewPart 行数" "$(R6)" "$OK3|0|0"
+expect "R6：每个副本 行数/重复键 | 目标分区非合并队列 | 快照到换分区之间的 NewPart 行数" "$(R6)" "$OK3|0|0"
 expect "标准答案：新分区里找不到原样的行" "$(bad_rows)" "0"
 expect "标准答案：丢了的键" "$(lost_keys)" "0"
 expect "前一天、后一天没动" "$(q1 "SELECT countIf(_partition_id = '20260323'), countIf(_partition_id = '20260325') FROM $T FORMAT CSV")" "1000,1000"
@@ -188,7 +196,7 @@ extra 2 w- 40 $((DAY + 50000000))
 q1 "SYSTEM SYNC REPLICA $T" >/dev/null
 g4=$(G4)
 note "R4 读到 ${g4}，快照是 $C0"
-expect "R4 拦下（不是「三个副本都 = 快照且队列空」，不换分区）" "$([ "$g4" != "$C0,$C0,$C0|0" ] && echo 1 || echo 0)" "1"
+expect "R4 拦下（不是「三张表全副本行数齐全且队列空」，不换分区）" "$([ "$g4" != "$(G4_expect)" ] && echo 1 || echo 0)" "1"
 note "处理：删掉 _bak/_dedup/_dupkeys 从 R1 重来，或者先停掉那个写入源"
 
 section "3b、快照之后有写入，但还没复制到执行 runbook 的节点：只数本节点的旧 R4 放行，改过的 R4 拦下"
@@ -199,7 +207,7 @@ extra 2 v- 20 $((DAY + 54000000))
 qn 3 "SYSTEM SYNC REPLICA $T" >/dev/null
 expect "旧 R4（只数 ch1）读到的还是快照行数，会放行" "$(G4_local)" "$C0"
 g4=$(G4); note "改过的 R4 读到 $g4"
-expect "改过的 R4 拦下" "$([ "$g4" != "$C0,$C0,$C0|0" ] && echo 1 || echo 0)" "1"
+expect "改过的 R4 拦下" "$([ "$g4" != "$(G4_expect)" ] && echo 1 || echo 0)" "1"
 note "照旧 R4 放行、紧接着在 ch1 上执行 R5，看这 20 行的下场："
 R5_SKIP_SYNC=1 R5
 qn 1 "SYSTEM START FETCHES $T" >/dev/null
@@ -212,7 +220,7 @@ note "REPLACE PARTITION 换掉的是这个分区里「换分区那一刻之前�
 
 section "4、R4 之后、R5 之前有写入：R6 的 part_log 那一条报出来"
 mk_load; R1; R2; R3
-expect "R4 当时是过的" "$(G4)" "$C0,$C0,$C0|0"
+expect "R4 当时是过的" "$(G4)" "$(G4_expect)"
 extra 3 z- 25 $((DAY + 52000000))
 R5
 r6=$(R6); note "R6 = $r6"
@@ -231,6 +239,39 @@ expect "R0 拦下（三个副本行数不等或队列非空）" "$(R0_ok "$r0" &
 qn 2 "SYSTEM START FETCHES $T" >/dev/null
 qn 2 "SYSTEM SYNC REPLICA $T" >/dev/null
 expect "放开之后 R0 通过" "$(R0_ok "$(R0)" && echo 1 || echo 0)" "1"
+
+section "5b、随机落点下的两道加固：dedup 未同步到全副本（实验 17 D）与其它分区的后台 merge"
+mk_load; R1; R2
+q1 "CREATE TABLE ${T}_dedup ON CLUSTER default AS $T" >/dev/null
+qn 3 "SYSTEM STOP FETCHES ${T}_dedup" >/dev/null
+note "ch3 停掉 dedup 的拉取；R3 带 insert_quorum = 3（超时设 3 秒），在换分区之前直接报错停下"
+err=$(q1 "INSERT INTO ${T}_dedup SETTINGS insert_quorum = 3, insert_quorum_timeout = 3000
+          SELECT * FROM ${T}_bak WHERE _partition_id = '$PID'
+            AND (id, settle_ms, rev) NOT IN (SELECT id, settle_ms, rev FROM ${T}_dupkeys)" 2>&1 || true)
+expect "R3 带 insert_quorum = 3 在 ch3 拉不到时报错（319）" "$(printf '%s' "$err" | grep -o 'Code: 319' | head -n1)" "Code: 319"
+note "即便漏写 insert_quorum（只写进了 ch1、ch2），R4 核对 dedup 三副本行数也会拦下，不会走到 R5 清空分区"
+q1 "INSERT INTO ${T}_dedup SELECT * FROM ${T}_bak WHERE _partition_id = '$PID'
+      AND (id, settle_ms, rev) NOT IN (SELECT id, settle_ms, rev FROM ${T}_dupkeys)"
+q1 "INSERT INTO ${T}_dedup SELECT * FROM ${T}_bak WHERE _partition_id = '$PID'
+      AND (id, settle_ms, rev) IN (SELECT id, settle_ms, rev FROM ${T}_dupkeys)
+    ORDER BY create_time LIMIT 1 BY id, settle_ms, rev"
+qn 2 "SYSTEM SYNC REPLICA ${T}_dedup" >/dev/null
+g4_dedup=$(G4); note "ch3 还没拉到 dedup 时 R4 读到 $g4_dedup"
+expect "R4 发现 dedup 在 ch3 上为 0 行，拦下" "$([ "$g4_dedup" != "$(G4_expect)" ] && echo 1 || echo 0)" "1"
+qn 3 "SYSTEM START FETCHES ${T}_dedup" >/dev/null
+qn 3 "SYSTEM SYNC REPLICA ${T}_dedup" >/dev/null
+expect "ch3 追平 dedup 后 R4 通过" "$(G4)" "$(G4_expect)"
+
+note "再看队列闸过滤：ch3 停掉 merge，后一天（20260325）多写一个 part 并触发合并，使全表队列里有挂着的 MERGE_PARTS"
+qn 3 "SYSTEM STOP MERGES $T" >/dev/null
+extra 1 m- 10 $((NEXT + 60000000))
+for n in 1 2 3; do qn $n "SYSTEM SYNC REPLICA $T" >/dev/null; done
+q1 "OPTIMIZE TABLE $T PARTITION ID '20260325' FINAL SETTINGS alter_sync = 0" >/dev/null 2>&1 || true
+whole_q=$(q1 "SELECT count() FROM clusterAllReplicas('default', system.replication_queue)
+              WHERE database = currentDatabase() AND table = '$T'" | tr -d '\n')
+expect "全表 replication_queue 非空（有别的分区的 MERGE_PARTS 挂着）" "$([ "$whole_q" -ge 1 ] && echo 1 || echo 0)" "1"
+expect "按目标分区过滤且排除 MERGE_PARTS / MUTATE_PART 之后，R4 照常通过" "$(G4)" "$(G4_expect)"
+qn 3 "SYSTEM START MERGES $T" >/dev/null
 
 section "6、量一下「几毫秒」：重建和换分区各花多久（lab 规模：当天 $N 行）"
 mk_load; R1; R2; R3; R5

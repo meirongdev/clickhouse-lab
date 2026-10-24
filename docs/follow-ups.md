@@ -8,10 +8,10 @@
 
 **机器准备**
 
-- [ ] OrbStack 的内存调到 100 GB 以上，给 macOS 留十几 GB；CPU 给全部核。核数会记在日志出处行的「机器」里。
+- [x] OrbStack 的内存调到 100 GB 以上，给 macOS 留十几 GB；CPU 给全部核。核数会记在日志出处行的「机器」里。（已在 Apple M5 Max 18 核 / 128 GiB 上调到 18 CPU / 100 GiB）
 - [ ] 数据目录放在空间够的盘上：P3 至少 250 GB，P4（B 档三副本）至少 400 GB。内置盘不够就接外置 SSD，用 `SCALE_DATA_DIR` 指过去。
 - [ ] 跑规模实验之前 `./cluster.sh down`，别让 Kafka 栈占着资源。
-- [ ] 先在这台机器上跑一遍 `SLOW=1 ./run-all.sh`，确认 26 个实验也全过。它会覆盖 `results/`，跑完用 `git diff` 看和 M2 Pro 那一轮的差别。要换成这台机器当基准，就提交，并同步改文档里引用的耗时和核数（report-pipeline.md 第五节、根 README 实验 26 那一行等）；不换就 `git checkout results/ docs/Test-Report.md` 还原。
+- [ ] 先在这台机器上跑一遍 `SLOW=1 ./run-all.sh`，确认 27 个实验也全过。它会覆盖 `results/`，跑完用 `git diff` 看和 M2 Pro 那一轮的差别。要换成这台机器当基准，就提交，并同步改文档里引用的耗时和核数（report-pipeline.md 第五节、根 README 实验 26 那一行等）；不换就 `git checkout results/ docs/Test-Report.md` 还原。
 
 **先写脚本**
 

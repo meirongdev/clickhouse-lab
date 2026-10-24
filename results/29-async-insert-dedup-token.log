@@ -1,0 +1,34 @@
+# 跑于 2026-10-24 20:46:58 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 4171c7c+改动 | 机器 Apple M5 Max（18 核 / 128 GiB），Docker 18 CPU / 98.1 GiB | SLOW=1
+
+=== 一、默认开关与陷阱：只开 async_insert = 1、没开 async_insert_deduplicate = 1 时，漏重且会静默丢新数 ===
+  [符合] async_insert,wait_for_async_insert,async_insert_deduplicate,异步去重窗口默认值：0,1,0,10000
+  [符合] 默认 async_insert_deduplicate = 0 时，async_blocks/ 节点数：0
+  [符合] 默认 async_insert_deduplicate = 0 时，blocks/ 只按第 1 条子插入记了 1 个节点（tok_trap_2 被丢弃）：1
+  [符合] 后果 1：重投同批第 2 条子插入（tok_trap_2）未被拦住，k=2 写出重复（行数）：2
+  [符合] 后果 2：重投的 tok_trap_1 建桶时，同批搭车的全新子插入 tok_trap_3（k=3）被整批静默吞掉（行数）：0
+
+=== 二、开齐 async_insert = 1, wait_for_async_insert = 1, async_insert_deduplicate = 1：三种重投全部拦住且不吞新数 ===
+  · 2a、同一个 flush 窗口里收到两条相同 token（tok_same）
+  [符合] 同一缓冲区内两条相同 token 去重后 k=10 行数：1
+  [符合] Keeper async_blocks/ 里记录了 all_tok_same：1
+  · 2b、第一次与别的插入攒进同一个 part，之后第 2 条子插入（tok_b）单独重投到另一个副本 ch2（且非键列 ts 不同）
+  [符合] 跨副本单独重投第 2 条子插入 tok_b（哪怕 ts 不同）被 async_blocks/ 拦住，k=21 行数仍为：1
+  · 2c、同一个 flush 窗口里「旧 token 重投（tok_a 先到建桶）+ 新 token 首投（tok_c 后到进桶）」
+  [符合] 混合批次中旧 token 被剔除、新 token 正常落盘（k=20,k=22 行数）：1,1
+
+=== 三、攒批效果与传参陷阱：HTTP 参数传 token 20 合 1，SQL 内联 SETTINGS 传 token 则分桶拆散 ===
+  [符合] 20 个并发小插入全部落表（总行数）：20
+  [符合] async_blocks/ 记录了全部 20 个子插入的 token：20
+  [符合] 通过 HTTP 参数传 token 时 20 个小插入合成 1 个 NewPart：1
+  [符合] Keeper 的 log/ 只新增了 1 条复制日志（0 -> 1）：1
+  · 对比：若把 SETTINGS insert_deduplication_token = '...' 写进 SQL 语句内部，INSERT 头部文本各不相同，会拆成独立队列桶
+  [符合] SQL 内联不同 token 的两条并发插入拆成了 2 个独立 NewPart（攒批失效）：2
+
+=== 四、同批子插入的报错隔离与单条子插入原子性 ===
+  [符合] 坏数据的那条子插入收到服务端报错：Code: 27
+  [符合] 同批次合法子插入 k=50 落盘且记 token，坏子插入的第 1 行 k=51 整条回滚且不记 token（k50,k51,tok50,tok51）：1,0,1,0
+  [符合] system.asynchronous_insert_log 分别记下 Ok 与 ParsingError：Ok,ParsingError
+
+=== 五、同步切异步（及回退）的过渡期边界：blocks/ 与 async_blocks/ 互不查对方 ===
+  [符合] 同步 token 切异步重投（k=60）、异步 token 切同步重投（k=50）均跨目录不互认（k60,k50,blocks新增,async_blocks_60）：2,2,1,1
+# 退出码 0

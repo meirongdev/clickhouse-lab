@@ -1,4 +1,4 @@
-# 跑于 2026-10-11 00:44:28 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab d5a651e | 机器 Apple M2 Pro（12 核 / 32 GiB），Docker 12 CPU / 15.7 GiB | SLOW=1
+# 跑于 2026-10-24 20:37:07 +0800 | 服务端 25.3.14.14 | 镜像 clickhouse/clickhouse-server:25.3.14.14@sha256:b627d7a9bc0e0c1bac26cdbe9d2fc6316faa29c5d8a174f28f5abd57d0fa6ba2 | lab 4171c7c+改动 | 机器 Apple M5 Max（18 核 / 128 GiB），Docker 18 CPU / 98.1 GiB | SLOW=1
 
 === A、临时表建好之后、换分区之前，同一天又写进来一批 ===
   [符合] 方案校验 1：临时表窗口内重复数：0
@@ -45,4 +45,13 @@ RemovePart	2	100018
   [符合] REPLACE_RANGE 落地的 part 在 part_log 里记成 NewPart，行数合计：100000
   · 所以 A 段那条事后检查必须卡在换分区那一刻之前（event_time_microseconds < 换分区时间），否则会把换进来的 part 也算成新写入
   · 该用的核对：clusterAllReplicas 数每个副本的行数、查全副本的 replication_queue，都清了再 DROP 临时表
+
+=== D、换分区落在还没拉到临时表 part 的副本上，三个副本一起被清空 ===
+  · ch3 停掉临时表的拉取；在 ch1 上往临时表写完去重后的数据（默认 insert_quorum = 0，写完 ch1 即返回）
+  [符合] 换分区之前临时表在三个副本上的行数（ch3 还没拉到）：100000,100000,0
+  [符合] 校验仍在 ch1 上跑：原表 − 临时表：18
+  · 下一条 REPLACE PARTITION 随机落到 ch3：ch3 上 ev17d_tmp 的这个分区是空的，语句照样成功
+  [符合] 换完之后三个副本的当天行数（全被清空）：0,0,0
+  [符合] 相邻两天不受影响：1000,1000
+  · 能提前拦下的两条：往临时表的 INSERT 加 insert_quorum = 3（ch3 拉不到就报 319），并且换分区前用 clusterAllReplicas 核临时表在三个副本上都是 N 行
 # 退出码 0

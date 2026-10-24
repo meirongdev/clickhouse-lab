@@ -4,8 +4,8 @@
 
 | 症状 | 收敛到哪一层 | 第一眼看的东西 | 本地能复现吗 |
 |---|---|---|---|
-| 行数比上游多 | 写入幂等：Connect 超时重投 + 块级去重窗口 | 重复组的写入时间间隔；`part_log` 里 `error = 389` 的 `NewPart`（窗口拦下过几次）；Keeper `blocks/` 的 znode 数 | 实验 02、12、21 |
-| 行数比上游少 | 接入链路：task 状态、DLQ、lag、offset 断点；开着 `exactlyOnce` 时还有状态表 | connector task 状态和报错（`State MISMATCH` / `State CONTAINS`）、DLQ topic 有没有量、消费组 lag、`query_log.written_rows`、状态表里每个分区记的区间 | 实验 09、23 |
+| 行数比上游多 | 写入幂等：Connect 超时重投 + 块级去重窗口；或只开了 `async_insert = 1` 漏开 `async_insert_deduplicate = 1` | 重复组的写入时间间隔；`part_log` 里 `error = 389` 的 `NewPart`（窗口拦下过几次）；Keeper `blocks/` 或 `async_blocks/` 的 znode 数 | 实验 02、12、21、29 |
+| 行数比上游少 | 接入链路：task 状态、DLQ、lag、offset 断点；开着 `exactlyOnce` 时还有状态表；或只开 `async_insert = 1` 没开 `async_insert_deduplicate = 1` 时重投建桶把同批新数吞掉 | connector task 状态和报错（`State MISMATCH` / `State CONTAINS`）、DLQ topic 有没有量、消费组 lag、`query_log.written_rows`、状态表里每个分区记的区间、`asynchronous_insert_log` | 实验 09、23、29 |
 | 行数对得上但值不对 | 时间与分区语义、JOIN 放大、聚合口径、上游字段名变了 | 分区按哪个时区截断、右表键是否唯一、可疑的列是不是一片默认值 | 实验 10、09 |
 | 插入变慢或 `Too many parts` | part 生产速率与 merge 消化速度 | 单分区 active part 数、`DelayedInserts` 计数 | 实验 11 |
 | 查询变慢 | 裁剪没吃到、merge 抢资源、`FINAL` | `query_log` 的 `read_rows` 与 `result_rows` 之比；带 `FINAL` 时看未合并的 part 在排序键上交叠得多广 | 实验 14 覆盖 `FINAL` 那一路 |

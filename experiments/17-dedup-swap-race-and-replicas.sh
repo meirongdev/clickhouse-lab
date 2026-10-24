@@ -4,7 +4,7 @@
 #   方案的保护只有换分区之前那两条校验（临时表窗口内重复数 = 0；原表 − 临时表 = 多余行数），
 #   换完之后核对 system.parts 的 sum(rows) 等于预期值、system.replication_queue 为空。
 #
-# 实验 16 验的是纸面上的 SQL，这里验三种「SQL 没错、时机不对」的情形：
+# 实验 16 验的是纸面上的 SQL，这里验四种「SQL 没错、时机或多副本落点不对」的情形：
 #   A、临时表建好之后、换分区之前，又有一批写进同一天（生产上这个分区在事故十几天后还被人工补发写进过几千行）：
 #      方案的校验全过，这批行被换分区静默抹掉；别的分区的写入不受影响。
 #   B、建临时表时连到的那个副本落后（少一个 part）：方案的校验都在同一个副本上算，照样全过，
@@ -12,6 +12,8 @@
 #   C、换完之后有一个副本还没执行 REPLACE_RANGE：方案只在当前节点上查 replication_queue 和
 #      system.parts，看到的是绿的；连到落后副本的查询还能读到重复行。临时表这时已经 DROP，
 #      落后的副本只能从别的副本拉，最后能不能追平。
+#   D、往临时表的 INSERT 落在 ch1（默认只写一个副本就返回），紧接着的 REPLACE PARTITION 随机落到
+#      还没拉到临时表 part 的 ch3：语句不报错，三个副本上的当天分区一起被换成空分区（0 行）。
 # 每段都给出能提前或事后发现它的那条检查，改过的 runbook 在实验 19 里整套跑。
 #
 # 生产 Aiven 是 Replicated 库，DDL 自动到每个节点；lab 是 Atomic 库，DDL 加 ON CLUSTER default 模拟。
@@ -89,10 +91,14 @@ plan_swap() { qn "$1" "ALTER TABLE $2 REPLACE PARTITION '$PID' FROM ${2}_tmp"; }
 # 方案换完之后的两条核对：当前节点的 system.parts 行数、当前节点的复制队列
 plan_parts() { qn "$1" "SELECT sum(rows) FROM system.parts WHERE database = currentDatabase() AND table = '$2' AND partition = '$PID' AND active"; }
 plan_queue() { qn "$1" "SELECT count() FROM system.replication_queue WHERE database = currentDatabase() AND table = '$2' AND is_currently_executing = 0"; }
-# 三个副本各自的当天行数，按 ch1,ch2,ch3 排
+# 三个副本各自的当天行数，按 ch1,ch2,ch3 排（拼上 system.one 保证某副本为 0 行时也不漏项）
 per_replica() {
-  q1 "SELECT arrayStringConcat(groupArray(toString(c)), ',') FROM (SELECT hostName() AS h, count() AS c
-      FROM clusterAllReplicas('default', currentDatabase(), $1) WHERE _partition_id = '$PID' GROUP BY h ORDER BY h)"
+  q1 "SELECT arrayStringConcat(groupArray(toString(c)), ',') FROM (
+      SELECT h, count() - 1 AS c FROM (
+        SELECT hostName() AS h FROM clusterAllReplicas('default', system.one)
+        UNION ALL
+        SELECT hostName() AS h FROM clusterAllReplicas('default', currentDatabase(), $1) WHERE _partition_id = '$PID'
+      ) GROUP BY h ORDER BY h)"
 }
 
 section "A、临时表建好之后、换分区之前，同一天又写进来一批"
@@ -186,7 +192,33 @@ expect "REPLACE_RANGE 落地的 part 在 part_log 里记成 NewPart，行数合�
 note "所以 A 段那条事后检查必须卡在换分区那一刻之前（event_time_microseconds < 换分区时间），否则会把换进来的 part 也算成新写入"
 note "该用的核对：clusterAllReplicas 数每个副本的行数、查全副本的 replication_queue，都清了再 DROP 临时表"
 
-for t in ev17a ev17b ev17c; do
+section "D、换分区落在还没拉到临时表 part 的副本上，三个副本一起被清空"
+mk_load ev17d
+q1 "DROP TABLE IF EXISTS ev17d_tmp ON CLUSTER default SYNC" >/dev/null
+q1 "CREATE TABLE ev17d_tmp ON CLUSTER default AS ev17d" >/dev/null
+qn 3 "SYSTEM STOP FETCHES ev17d_tmp" >/dev/null
+note "ch3 停掉临时表的拉取；在 ch1 上往临时表写完去重后的数据（默认 insert_quorum = 0，写完 ch1 即返回）"
+qn 1 "INSERT INTO ev17d_tmp
+    SELECT id, settle_ms, rev, min(create_time) AS create_time,
+      argMin(ext_id, create_time) AS ext_id, argMin(player, create_time) AS player, argMin(agent, create_time) AS agent,
+      argMin(amount, create_time) AS amount, argMin(win, create_time) AS win, argMin(status, create_time) AS status,
+      argMin(memo, create_time) AS memo
+    FROM ev17d WHERE settle_ms BETWEEN $W0 AND $W1
+    GROUP BY id, settle_ms, rev SETTINGS prefer_column_name_to_alias = 1"
+qn 1 "INSERT INTO ev17d_tmp SELECT * FROM ev17d WHERE settle_ms >= $DAY AND settle_ms < $W0"
+qn 1 "INSERT INTO ev17d_tmp SELECT * FROM ev17d WHERE settle_ms > $W1 AND settle_ms < $NEXT"
+qn 2 "SYSTEM SYNC REPLICA ev17d_tmp" >/dev/null
+expect "换分区之前临时表在三个副本上的行数（ch3 还没拉到）" "$(per_replica ev17d_tmp)" "$N,$N,0"
+expect "校验仍在 ch1 上跑：原表 − 临时表" "$(gate_diff 1 ev17d)" "$D"
+note "下一条 REPLACE PARTITION 随机落到 ch3：ch3 上 ev17d_tmp 的这个分区是空的，语句照样成功"
+plan_swap 3 ev17d
+qn 3 "SYSTEM START FETCHES ev17d_tmp" >/dev/null
+for n in 1 2 3; do qn $n "SYSTEM SYNC REPLICA ev17d" >/dev/null; done
+expect "换完之后三个副本的当天行数（全被清空）" "$(per_replica ev17d)" "0,0,0"
+expect "相邻两天不受影响" "$(q1 "SELECT countIf(_partition_id = '20260323'), countIf(_partition_id = '20260325') FROM ev17d FORMAT CSV")" "1000,1000"
+note "能提前拦下的两条：往临时表的 INSERT 加 insert_quorum = 3（ch3 拉不到就报 319），并且换分区前用 clusterAllReplicas 核临时表在三个副本上都是 N 行"
+
+for t in ev17a ev17b ev17c ev17d; do
   for s in "" _tmp; do q1 "DROP TABLE IF EXISTS $t$s ON CLUSTER default SYNC" >/dev/null; done
 done
 exit $FAILED

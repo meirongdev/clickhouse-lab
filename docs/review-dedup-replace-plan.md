@@ -59,8 +59,9 @@ lab 用的表是生产形状的：分区键、排序键、主键都照生产写�
 | H6 | 建完临时表、换分区之前有写入进同一天：被抹掉，方案的校验和核对全绿 | 17 A | 50 行没了，核对仍是绿的 | 成立；part_log 能事后发现 |
 | H7 | 建临时表时连到的副本落后：三个副本一起丢 | 17 B | 30 行三副本都没了 | 成立；三副本行数比对能提前拦下 |
 | H8 | 方案只查当前节点：有副本没执行 `REPLACE_RANGE` 时也是绿的 | 17 C | ch1 核对是绿的，ch3 仍有 18 个重复键 | 成立；`alter_sync` 默认只等自己这个副本。临时表提前删掉，落后副本仍能从别的副本拉过来追平 |
+| H8b | 写入临时表和执行 `REPLACE PARTITION` 落在不同副本：若换分区落到还没拉完临时表 part 的副本，三副本一起被清空 | 17 D | 三个副本当天行数全变 0 | 成立；写入临时表要带 `insert_quorum = 3`，换分区前 R4 还要数 `dedup` 和 `bak` 在三个副本上的行数 |
 | H9 | 方法一原文被拒；放开之后读放大跟着全表 part 数走；`IN PARTITION` 能解决 | 18 | 读窗口的遍数 | 成立，见下文 |
-| H10 | 改过的 runbook 能拦下 H6–H8，回滚能逐行还原 | 19 | 注入后看哪一道闸拦下 | 成立；R4 必须数全部副本（见下文） |
+| H10 | 改过的 runbook 能拦下 H6–H8b，回滚能逐行还原 | 19 | 注入后看哪一道闸拦下 | 成立；R4 必须数三张表在全部副本上的行数，复制队列按当天分区过滤并排除后台 merge（见下文） |
 | H11 | 「换分区几毫秒」 | 19 六 | `query_log` | 换分区本身不写数据（写入 0 行）；lab 10 万行上重建和换分区都只有几十毫秒，看不出差别；生产上时间应该主要花在重建那一步（推断：重建的读写量随分区行数线性增长，换分区只挂硬链接） |
 | H12 | `ATTACH PARTITION … FROM` 和 `REPLACE PARTITION` 复用文件，不拷数据 | 20 | 列文件的 inode、`written_rows`、part_log | 成立：快照、换分区、回滚三条语句在三个副本上都和来源共用 inode、写入 0 行，另两个副本也是本地挂硬链接、没去拉数据（本地盘，S3 没验） |
 
@@ -89,6 +90,10 @@ lab 用的表是生产形状的：分区键、排序键、主键都照生产写�
   - `REPLACE PARTITION` 默认（`alter_sync = 1`）只等发起语句的那个副本执行完，其他副本稍后各自执行 `REPLACE_RANGE`。原方案只在发起节点（ch1）核对，看到本地队列为空就立刻 `DROP` 临时表。
   - 实验 17 C 观测到落后节点（ch3）尚未执行 `REPLACE_RANGE`，连到该节点的查询依然能读到全部 18 个重复键。临时表删掉之后落后副本仍能从别的副本拉取追平，但过早删除临时表使排障现场丢失。
   - **底层机制发现**：`REPLACE_RANGE` 落地的 part 在 `system.part_log` 中同样记为 `NewPart`（而非 `DownloadPart`），副本是从别人那里拉的也一样。因此 Runbook R6 检查并发写入的时间范围必须严格卡在 `< 换分区时刻`，否则会把换进来的合法 part 误报为并发新写入。
+- **H8b：换分区落在还没拉完临时表 part 的副本上，三个副本一起被清空**：
+  - 客户端每条语句经过负载均衡可能落到不同节点。`INSERT INTO tmp` 默认 `insert_quorum = 0`，只写进当前连到的那个副本（例如 ch1）就返回，其余副本后台异步拉取。
+  - 若紧接着的 `ALTER TABLE 原表 REPLACE PARTITION … FROM tmp` 被路由到还没拉完 `tmp` 分区的副本（例如 ch3），ch3 会拿自己本地空的 `tmp` 分区生成 `REPLACE_RANGE` 写进复制日志，**把三个副本上的当天分区一起清空成 0 行**（实验 17 D）。
+  - **防线**：工作表写入一律加 `SETTINGS insert_quorum = 3`，分区挂载与替换一律加 `SETTINGS alter_sync = 2`，并且在 R4 同时核对原表、`dedup` 和 `bak` 在三个副本上的行数（实验 19 第 5b 段）。
 
 ### H9 的量（实验 18）
 
@@ -128,9 +133,9 @@ lab 用的表是生产形状的：分区键、排序键、主键都照生产写�
 3. **原文不能直接执行。** 第 1 步语法错误，第 2 步 184 报错。两处都是什么都没写就停了的安全失败，但说明脚本没在任何环境跑过。
 4. **修完语法之后，还有三类会静默出错的地方：**
    - 按位置对列（H3）。整个窗口坏掉，校验全绿。
-   - 换分区的时机（H6、H7）。丢掉的行在任何一条校验里都看不出来。
+   - 换分区的时机与多副本落点（H6、H7、H8b）。丢掉的行在任何一条校验里都看不出来；若换分区落到还没拉完临时表 part 的副本，三个副本会一起被清空。
    - 校验口径（H8）。按 UTC 时间范围算，只看当前节点，`system.parts` 和写死的预期值比。
-5. **改过的 runbook（下节）在 lab 上整套跑通。** H6–H8 每一种都被某一道闸拦下或报出来，回滚后和原分区逐行一致（实验 19）。早期版本的 R4 只数执行节点，实验 19 第 3b 段补测出它会放行「已经写进别的副本、还没复制到执行节点」的那笔写入，放行之后这笔写入在三个副本上全没了；现在的 R4 改成数全部副本、并要求全副本复制队列为空。
+5. **改过的 runbook（下节）在 lab 上整套跑通。** H6–H8b 每一种都被某一道闸拦下或报出来，回滚后和原分区逐行一致（实验 19）。早期版本的 R4 只数执行节点，实验 19 第 3b 段补测出它会放行「已经写进别的副本、还没复制到执行节点」的那笔写入，放行之后这笔写入在三个副本上全没了；实验 19 第 5b 段进一步补测出随机落点下 `dedup` 未同步与后台 merge 误伤的问题。现在的 R4 改成同时数原表、`dedup` 和 `bak` 在全部副本上的行数，并把复制队列过滤到当天分区且排除后台 merge/mutation。
 
 ## 改过的 runbook
 
@@ -138,14 +143,14 @@ lab 里的表名、列名见实验 19。给生产的版本只换了库名、表�
 
 | 步 | 做什么 | 闸 |
 |---|---|---|
-| R0 | 只读前置 | 用 `clusterAllReplicas` 查：三个副本当天行数相等；全副本 `replication_queue` 为空；没有未完成的 mutation；三张工作表的名字没被占 |
-| R1 | `CREATE TABLE bak AS 原表`，再 `ALTER TABLE bak ATTACH PARTITION ID '日期' FROM 原表`（本地盘上是硬链接、写入 0 行，见实验 20）。记下快照时刻 | `bak` 行数 = 线上行数，记为 C0 |
-| R2 | 从 `bak` 找出重复键，固化成一张小表 | 组数、多余行数等于预期；每组业务列哈希数（`cityHash64(tuple(…))`）为 1 |
-| R3 | 从 `bak` 建去重后的分区，不读线上表。不在重复键里的行用 `SELECT *` 原样拷；重复键用 `ORDER BY create_time LIMIT 1 BY 键` | 行数 = C0 − 多余行数；键数 = 快照键数；没有重复键 |
-| R4 | 换分区前一刻，用 `clusterAllReplicas` 再数一次**每个副本**的当天行数，并查全副本复制队列 | 三个副本都必须仍等于 C0，队列为空。只数当前节点不够（实验 19 第 3b 段） |
-| R5 | `ALTER TABLE 原表 REPLACE PARTITION ID '日期' FROM dedup`，紧跟 R4 执行。记下换分区时刻 | — |
-| R6 | 事后核对 | 每个副本行数 = C0 − 多余行数，且没有重复键；全副本队列为空；part_log 里「快照时刻 ≤ t < 换分区时刻」这个分区 `error = 0` 的 `NewPart` 行数为 0 |
-| R7 | 回滚：`ALTER TABLE 原表 REPLACE PARTITION ID '日期' FROM bak` | 和原分区逐行一致（实验 19 二） |
+| R0 | 只读前置 | 用 `clusterAllReplicas` 查：三个副本当天行数相等；全副本当天分区的 `replication_queue`（排除 `MERGE_PARTS`、`MUTATE_PART`）为空；没有未完成的 mutation；三张工作表的名字没被占 |
+| R1 | `CREATE TABLE bak AS 原表`，再 `ALTER TABLE bak ATTACH PARTITION ID '日期' FROM 原表 SETTINGS alter_sync = 2`（本地盘上是硬链接、写入 0 行，见实验 20）。记下快照时刻 | `bak` 在三个副本上的行数都 = 线上行数，记为 C0 |
+| R2 | 从 `bak` 找出重复键，固化成一张小表（带 `SETTINGS insert_quorum = 3`） | 组数、多余行数等于预期；每组业务列哈希数（`cityHash64(tuple(…))`）为 1 |
+| R3 | 从 `bak` 建去重后的分区（带 `SETTINGS insert_quorum = 3`），不读线上表。不在重复键里的行用 `SELECT *` 原样拷；重复键用 `ORDER BY create_time LIMIT 1 BY 键` | 行数 = C0 − 多余行数；键数 = 快照键数；没有重复键 |
+| R4 | 换分区前一刻，用 `clusterAllReplicas` 再数一次**每个副本**上原表、`dedup`、`bak` 的当天行数，并查全副本当天分区的复制队列（排除后台 merge/mutation） | 原表、`bak` 在三个副本上都等于 C0，`dedup` 在三个副本上都等于 C0 − 多余行数，当天队列为空（实验 19 第 3b、5b 段） |
+| R5 | `ALTER TABLE 原表 REPLACE PARTITION ID '日期' FROM dedup SETTINGS alter_sync = 2`，紧跟 R4 执行。记下换分区时刻 | — |
+| R6 | 事后核对 | 每个副本行数 = C0 − 多余行数，且**每个副本**都没有重复键；全副本当天队列为空；part_log 里「快照时刻 ≤ t < 换分区时刻」这个分区 `error = 0` 的 `NewPart` 行数为 0 |
+| R7 | 回滚：`ALTER TABLE 原表 REPLACE PARTITION ID '日期' FROM bak SETTINGS alter_sync = 2` | 和原分区逐行一致（实验 19 二） |
 | R8 | 收尾：R6 全过后立刻 `DROP … SYNC` 掉 dedup 和 dupkeys；`bak` 留到对账和下游事实表确认之后再 `DROP … SYNC` | — |
 
 ### 写 R6 时容易踩的三处
@@ -169,7 +174,7 @@ lab 里的表名、列名见实验 19。给生产的版本只换了库名、表�
 
 | 办法 | 机制 | 能防 / 能清什么 | 代价与风险 | 出处 |
 |---|---|---|---|---|
-| **接入层幂等**：块级去重 + `insert_deduplication_token`；Kafka producer 的 `enable.idempotence` | 块级去重：同一分区里同样的块（或同一个 token）在窗口内只写一次。producer 幂等：producer 自己的重试不会让 broker 存两份 | 事前的：只防重投，清不了已经写进去的重复 | 块级去重是尽力而为，窗口外的重投、批次边界变了的重投都拦不住（实验 02、21）。本案的重复来自 producer 重试，两份消息 offset 不同、token 也不同，块级去重根本认不出来，要在 producer 端开幂等：3.7 默认开，但和别的配置冲突时会被悄悄关掉（生产 producer 的配置待核）。另外异步插入默认不做块级去重（25.3 `async_insert_deduplicate` 默认 false） | [重试去重的窗口限制](https://clickhouse.com/docs/concepts/features/operations/insert/deduplicating-inserts-on-retries#deduplication-window-limit)、[producer `enable.idempotence`](https://kafka.apache.org/37/configuration/producer-configs/#producerconfigs_enable.idempotence)、[`async_insert_deduplicate` 源码](https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Core/Settings.cpp#L1717) |
+| **接入层幂等**：块级去重 + `insert_deduplication_token`；服务端异步插入 `async_insert_deduplicate = 1`；Kafka producer 的 `enable.idempotence` | 块级去重：同一分区里同样的块（或同一个 token）在窗口内只写一次。producer 幂等：producer 自己的重试不会让 broker 存两份 | 事前的：只防重投，清不了已经写进去的重复 | 块级去重是尽力而为，窗口外的重投、批次边界变了的重投都拦不住（实验 02、21）。本案的重复来自 producer 重试，两份消息 offset 不同、token 也不同，块级去重根本认不出来，要在 producer 端开幂等：3.7 默认开，但和别的配置冲突时会被悄悄关掉（生产 producer 的配置待核）。另外异步插入默认不做块级去重（25.3 `async_insert_deduplicate` 默认 false，只开 `async_insert = 1` 会漏拦第 2..N 条子插入并在重投建桶时静默吞掉同批新数，必须配齐 `async_insert_deduplicate = 1`，实验 29） | [重试去重的窗口限制](https://clickhouse.com/docs/concepts/features/operations/insert/deduplicating-inserts-on-retries#deduplication-window-limit)、[producer `enable.idempotence`](https://kafka.apache.org/37/configuration/producer-configs/#producerconfigs_enable.idempotence)、[`async_insert_deduplicate` 源码](https://github.com/ClickHouse/ClickHouse/blob/v25.3.13.19-lts/src/Core/Settings.cpp#L1717) |
 | **`ReplacingMergeTree` + `FINAL`** | 读的时候按排序键折叠同一个键的多份 | 以后的重复在读时不可见；后台合并后物理消失 | 要换表引擎、加版本列，清不了这张表现在的重复，除非迁移。`FINAL` 的代价量过：比不去重贵，比手写去重便宜得多（内存差一个数量级以上），差多少取决于重叠范围（实验 14） | [FINAL 修饰符](https://clickhouse.com/docs/reference/statements/select/from#final-modifier)、[ReplacingMergeTree](https://clickhouse.com/docs/reference/engines/table-engines/mergetree-family/replacingmergetree#query-time-de-duplication--final) |
 | **`OPTIMIZE TABLE … PARTITION … FINAL DEDUPLICATE [BY …]`** | 把整个分区合并成一个 part，合并时去掉重复行 | 能清。不写 `BY` 时比较所有列，本案约三分之一的重复 `create_time` 不同，必须 `DEDUPLICATE BY` 去掉 `create_time` 那一列 | 重写整个分区（本案一千多万行全部重写）；`BY` 之后同一组留下哪一行由合并决定，不能像 R3 那样指定「留 `create_time` 最早的」；执行前不能验结果，没有原生回滚，要回滚得先像 R1 那样做快照。没在 lab 上量过（待一手观察） | [OPTIMIZE … DEDUPLICATE BY](https://clickhouse.com/docs/reference/statements/optimize#by-expression) |
 | **轻量删除** `DELETE FROM … IN PARTITION … WHERE …` | 给命中的行写 `_row_exists` 掩码，其余列硬链接，合并时才物理删除 | 能清，只写一列 | 25.3 上必须带 `IN PARTITION`，否则全表每个 part 都要过一遍（实验 18）；按 `(_part, _part_offset)` 删要放开 `allow_nondeterministic_mutations`；按 `create_time` 删分不开时间相同的两份（实验 18 六）；没有回滚，执行前也没法验结果。注意它和 `ALTER TABLE … DELETE` 不是一回事：后者是重量级 mutation，要重写命中的 part | [轻量删除](https://clickhouse.com/docs/reference/statements/delete#how-lightweight-deletes-work-internally-in-clickhouse)、[ALTER DELETE](https://clickhouse.com/docs/reference/statements/alter/delete) |

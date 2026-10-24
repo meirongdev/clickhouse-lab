@@ -22,6 +22,7 @@
 | 报表：建表、对账、重算、按时区上卷 | [docs/report-pipeline.md](docs/report-pipeline.md) | 24、25、26 |
 | 明细表在线换成 `ReplicatedReplacingMergeTree` | [docs/engine-migration-runbook.md](docs/engine-migration-runbook.md) | 27 |
 | 巡检、误删之后怎么救、复制日志序号到顶 | [docs/daily-checklist.md](docs/daily-checklist.md) | 07、11、13、28 |
+| 查生产 Aiven 集群的架构、三档规格与配置参数 | [docs/aiven-production-specs.md](docs/aiven-production-specs.md) | prod-check |
 | 每个实验跑没跑过、过没过 | [docs/Test-Report.md](docs/Test-Report.md) | 全部 |
 | 接下来要做的事：规模验证、生产只读核对、要业务拍板的 | [docs/follow-ups.md](docs/follow-ups.md) | — |
 

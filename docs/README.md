@@ -9,6 +9,7 @@
 | `data-problems.md` | 多了 / 少了 / 不对三类问题的排查顺序，含对账口径 |
 | `daily-checklist.md` | 固定跑的巡检、出事时的恢复动作、需要演练的条目 |
 | `deployment-architecture.md` | lab 的部署形状（实测）、和生产的差别、生产选型的判断与依据 |
+| `aiven-production-specs.md` | Aiven 生产环境规格与配置全集：集群架构、三档规格（A/B/C）、服务端参数、Profile 强约束、冷热分层及托管平台特有行为 |
 | `review-dedup-replace-plan.md` | 评审一份 REPLACE PARTITION 去重方案：测试方案、实验 16–20 的结论、改过的 runbook、几种清理办法的对比 |
 | `production-shape.md` | 生产形态的脱敏规格：集群、节点规格和数据量的三档、冷热分层、34 列宽表的 DDL、写入速率、重复的三种形状、生产实际设置对照（`cfg/prod/`）、只读补数据的 SQL |
 | `plan-scale-dedup.md` | 待建实验 22 的计划：在更大的机器上按生产量级（每天一千多万到三亿多行）跑改过的 runbook，量内存、磁盘、part 数这些能带到生产的数 |

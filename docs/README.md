@@ -22,6 +22,7 @@
 | `scale-spec-comparison-4c-8c-16c.md` | 4c16g / 8c32g / 16c64g 三档规格单节点同口径压测横向对比与选型决策矩阵（实验 31/32/33） |
 | `scale-4c16g-cluster-vs-single-comparison.md` | 4c16g 规格「3 节点集群 vs 单节点形态」同口径深度对照与网络/存储损耗剖析（实验 30 vs 实验 33） |
 | `scale-300m-optimization-recommendations.md` | 单日 3 亿行规模 ReplacingMergeTree 优化建议与 2026 演进路线：类型精简（UUID/Decimal64）、Projection 索引、归档自动固化、预聚合及 LTS 升级规划 |
+| `review-scale-300m-reports.md` | 3 亿行压测报告与优化建议技术 Review：数据口径纠偏、架构推论严密性、优化副作用及仿真噪声审查 |
 | `Test-Report.md` | 全部实验的通过情况（由 `./report.sh` 从 `results/` 生成）和业务场景到实验的对照 |
 | `follow-ups.md` | 还没做完的事：在 128 GB 的 Mac Studio 上做的规模验证、生产上只读要拿的数据、要和业务定的口径、lab 上还能补的小实验 |
 

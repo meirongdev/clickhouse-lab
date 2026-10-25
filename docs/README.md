@@ -19,6 +19,8 @@
 | `report-pipeline.md` | 报表链路：明细和报表表怎么建、哪些重复会让物化视图喂的报表多算、对账和带闸的重算、按时区上卷、重算时限线程（实验 24、25、26） |
 | `engine-migration-runbook.md` | 明细表在线换成 `ReplicatedReplacingMergeTree`：`ATTACH` 搬历史、停写补齐、行数闸、`EXCHANGE` 切换、回滚（实验 27） |
 | `scale-300m-comprehensive-report.md` | 单日 3 亿行 ReplacingMergeTree 全规格阶梯压测综合报告：4c16g / 8c32g / 16c64g 性能边界及单机 vs Aiven 3 节点拓扑对比（实验 30/31/32/33） |
+| `scale-spec-comparison-4c-8c-16c.md` | 4c16g / 8c32g / 16c64g 三档规格单节点同口径压测横向对比与选型决策矩阵（实验 31/32/33） |
+| `scale-4c16g-cluster-vs-single-comparison.md` | 4c16g 规格「3 节点集群 vs 单节点形态」同口径深度对照与网络/存储损耗剖析（实验 30 vs 实验 33） |
 | `scale-300m-optimization-recommendations.md` | 单日 3 亿行规模 ReplacingMergeTree 优化建议与 2026 演进路线：类型精简（UUID/Decimal64）、Projection 索引、归档自动固化、预聚合及 LTS 升级规划 |
 | `Test-Report.md` | 全部实验的通过情况（由 `./report.sh` 从 `results/` 生成）和业务场景到实验的对照 |
 | `follow-ups.md` | 还没做完的事：在 128 GB 的 Mac Studio 上做的规模验证、生产上只读要拿的数据、要和业务定的口径、lab 上还能补的小实验 |

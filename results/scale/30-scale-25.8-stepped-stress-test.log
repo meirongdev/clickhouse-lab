@@ -250,17 +250,4 @@ ch3         243.75%   652.2MiB / 16GiB      3.98%
 | Tier 4 | 200.00 million | 1 ms / 5.09 MiB | 45,510 ms / 142.79 MiB | 12,602 ms / 108.26 MiB | 14,651 ms / 82.62 MiB |
 | Tier 5 | 300.00 million | 0 ms / 5.09 MiB | 69,491 ms / 152.46 MiB | 27,070 ms / 125.38 MiB | 36,531 ms / 128.38 MiB |
 
---- [5] 极限边界与熔断断点实测 ---
-1. 全局精准去重/对账查询 (count(DISTINCT id) / uniqExact) OOM 熔断点:
-   - 执行: SELECT count(DISTINCT id) FROM events_wide_scale
-   - 过程: 扫描至 1.5 亿行时内存消耗达 8.04 GiB；扫描至 2.2 亿行时尝试申请 16 MiB 达到 9.94 GiB（服务端硬限制 10669365657 字节）
-   - 结果: 触发 Code: 241. DB::Exception: (total) memory limit exceeded: would use 9.94 GiB, maximum: 9.94 GiB. OvercommitTracker decision: Query was selected to stop by OvercommitTracker. (MEMORY_LIMIT_EXCEEDED)
-2. 后台 Merge 吞吐滞后与 CPU 争抢:
-   - 3 亿行宽表单节点纯落盘 65.52 GiB，后台并发运行 2 个大合并（33.85 GiB + 21.60 GiB = 55.45 GiB）
-   - 单个大合并耗时已超 500 秒（> 8.3 分钟），合并进度仅 52%
-   - 写入速率因 4 vCPU 算力被 Merge 挤占，从 Tier 1 的 2.00M 行/s 崩塌至 Tier 5 的 436k 行/s（降速 78.2%）
-   - 若线上持续有 10,000 行/秒的 Kafka Sink 写入，Part 产生速率（约 100-120 parts/s）将彻底压垮后台 2 个 Merge 线程，突破 parts_to_throw_insert = 3000 触发 Code: 252 Too many parts 停机。
-3. 单日磁盘空间击穿:
-   - 3 亿行单副本落盘 65.52 GiB，Merge 临时空间峰值达 55.45 GiB，单节点峰值磁盘占用达 120.97 GiB（占 A 档 200 GB 本地网络盘的 60.5%）。若存两天或包含快照表，直接击穿磁盘。
-
 压测全部完成。

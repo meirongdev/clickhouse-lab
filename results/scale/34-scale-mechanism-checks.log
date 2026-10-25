@@ -1,0 +1,55 @@
+# 跑于 2026-10-25 10:09:36 +0800 | 服务端 25.8.33.6 | 镜像 clickhouse/clickhouse-server:25.8.33.6@sha256:0152dd511befe6a2c2ef53e930726179669b08116da78500b37c51c96ff5ee77 | lab 42bf496+改动 | 机器 Apple M5 Max（18 核 / 128 GiB），Docker 18 CPU / 98.1 GiB | 生产设置 档 A
+
+=== 一、默认值 ===
+  [符合] execute_merges_on_single_replica_time_threshold,parts_to_delay_insert,parts_to_throw_insert,use_skip_indexes_if_final,clean_deleted_rows,deduplicate_merge_projection_mode：0,1000,3000,1,Never,throw
+
+=== 二、FINAL 的代价跟着 part 之间的重叠走，不跟着行数走 ===
+  · 两张表各写 8 批 × 500 万行；mono 的 settle_ms = base + number，wrap 的 settle_ms = base + number % 1000 万（回绕 4 轮）
+  · 行数,part 数：mono 40000000,40，wrap 40000000,40
+  [符合] 两张表的行数和 part 数相同：40000000,40
+  [符合] mono：键范围和别的 part 相交的 part：0/40
+  [符合] wrap：键范围和别的 part 相交的 part：40/40
+  · count() FINAL 3 次的中位数：mono 4 ms（峰值内存 2.14 MiB），wrap 446 ms（155.51 MiB）
+  · wrap 加 WHERE tenant_id = 5：476 ms，read_rows 40098304（不加是 40098304）
+  [符合] wrap 的 count() FINAL 比 mono 慢 10 倍以上：1
+  [符合] 均匀随机的 tenant_id 上加过滤，read_rows 不变：40098304
+  [符合] 加了过滤也不更快（中位数不低于不加的八成）：1
+  · 放开 merge，两张表都 OPTIMIZE FINAL 成 1 个 part 再测
+  [符合] 合并之后的 part 数（mono,wrap）：1,1
+  · 合并成 1 个 part 之后 count() FINAL 的中位数：mono 3 ms，wrap 2 ms
+  [符合] wrap 合并之后快 10 倍以上：1
+
+=== 三、use_skip_indexes_if_final 能剪掉多少，看数据分布 ===
+  · 2000 万行：tenant_rand 和实验 30/33 的 tenant_id 一样是 cityHash64 % 20（均匀随机）；tenant_clu 沿 settle_ms 每 100 万行换一个值（成段聚集）
+  · 结果,read_rows：随机列 开 999681,20000000、关 999681,20000000；聚集列 开 1000000,1064960、关 1000000,20000000
+  [符合] 随机列开着也读全表：20000000
+  [符合] 随机列开关不影响结果：999681
+  [符合] 聚集列开着读不到一成：1
+  [符合] 聚集列关掉读全表：20000000
+  [符合] 聚集列开关不影响结果：1000000
+
+=== 四、id 改成 UUID：count(DISTINCT id) 的内存不变，落盘不到一半 ===
+  · 3000 万行：String 每行落盘 37.1 B、峰值内存 1.53 GiB、耗时中位数 802 ms；UUID 每行 16.1 B、1.51 GiB、327 ms
+  [符合] 两种类型的 count(DISTINCT) 峰值内存差不到一成：1
+  [符合] UUID 的落盘不到 String 的一半：1
+
+=== 五、max_bytes_before_external_group_by 管不到 count(DISTINCT) ===
+  · 单条查询内存上限 1e9、外部聚合阈值 4e8，表是上一节那 3000 万个 String id
+  [符合] count(DISTINCT id) 照样报内存超限：Code: 241
+  [符合] 写成 GROUP BY 子查询能落盘跑完：30000000
+  [符合] 打开 count_distinct_optimization 也能跑完：30000000
+
+=== 六、Decimal(18,8) 的上限与 sum 的结果类型 ===
+  [符合] 能存的最大值：9999999999.99999999
+  [符合] 100 亿存不下（69 = ARGUMENT_OUT_OF_BOUND）：Code: 69
+  [符合] sum 的结果类型：Decimal(38, 8)
+  [符合] 1000 个 90 亿相加不溢出：9000000000000
+
+=== 七、ReplacingMergeTree 上的 PROJECTION ===
+  [符合] 默认设置下 ADD PROJECTION 被拒：Code: 344
+  [符合] 不带 FINAL 的点查读投影：ReadFromMergeTree (p_user)
+  [符合] 带 FINAL 的点查读原表：ReadFromMergeTree (exp34.proj)
+
+=== 八、ReplacingMergeTree(ver, is_deleted) 的删除标记 ===
+  [符合] OPTIMIZE FINAL 之后的物理行数,FINAL 读到的行数：2,1
+# 退出码 0

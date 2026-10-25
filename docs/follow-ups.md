@@ -75,20 +75,20 @@ SQL 见 [production-shape.md 第八节](production-shape.md#八还缺的生产�
 - [ ] 用真的 connector 走一遍换引擎时的暂停和恢复（实验 27 的 sink 是脚本模拟的）。
 - [ ] 开着 `exactlyOnce` 时 Keeper 抖动，状态表本身读写失败会怎样（deployment-architecture.md 第三节第 1 条）。
 
-## 五、单日 3 亿行规模实测已完成项与优化落地清单
+## 五、单日 3 亿行规模压测（ClickHouse 25.8）
 
-详细优化方案见 [scale-300m-optimization-recommendations.md](scale-300m-optimization-recommendations.md)，压测综合对比见 [scale-300m-comprehensive-report.md](scale-300m-comprehensive-report.md)。
+结论和局限见 [scale-300m.md](scale-300m.md)。
 
-**已完成阶梯压测（ClickHouse 25.8 LTS，1000 万 -> 3 亿行）**：
-- [x] 实验 30：3 节点 4c16gb（business-16）集群压测，测定 2.2 亿行 OOM 崩溃边界与合并挤压导致写入暴跌 78.2% 现象。
-- [x] 实验 31：单节点 8c32gb（business-32 规格）压测，证实 3 亿行高基数去重需 18.11 GiB 内存，8c32g 为生产安全基准线。
-- [x] 实验 32：单节点 16c64gb（business-64 规格）压测，去重压至 6.71 秒，内存余量 25 GiB，多指标分析全面进入秒级响应。
-- [x] 实验 33：单节点 4c16gb 阶梯压测（同口径对照实验 30），证实单机写入 1.49M/s（3 节点单机宿主争抢折损至 436k/s），并实测 Q5 `count(DISTINCT id)` 在 2 亿行以上复现 `Code: 241` OOM。
+**做过的（lab 实测，每条查询只跑 1 次）**
 
-**待落地优化验证任务**：
-- [ ] **待建实验 34：Schema 类型精简实测**：将 `id` 改为原生 `UUID`，5 个金额列改为 `Decimal(18,8)`，编码列改为 `LowCardinality`，时间戳加 `CODEC(Delta, ZSTD)`。对比落盘体积、FINAL 排序耗时与 `uniqExact` 状态内存下降幅度。
-- [ ] **生产业务排序键排查**：核验上游下发数据中 `settle_ms` 在未结算与结算后是否变更。若有变更，必须重构 ORDER BY 键（如改用 `(tenant_id, id)`），否则 ReplacingMergeTree 将产生未去重脏数据。
-- [ ] **局部投影 (PROJECTION) 替代跳数索引**：针对 `WHERE user_id = ...` 建立投影，对比现有 `minmax` 跳数索引 0% 裁剪率的问题，验证毫秒级剪枝效果。
-- [ ] **历史分区自动固化合并**：在配置中挂载 `min_age_to_force_merge_seconds = 86400`，测试日分区自动合为一个 Part 后结合 `do_not_merge_across_partitions_select_final = 1` 的短路免去重效果。
-- [ ] **规范化压测与并发测试**：引入包含 30%~50% 真实重投率与乱序到达的仿真生成器；使用 `clickhouse-benchmark` 进行 4/8/16 并发读压测，测定各档位 QPS 极限。
+- [x] 实验 30（三副本 4c16g 同机）、33（单节点 4c16g，只差拓扑）、31（8c32g）、32（16c64g）：10M → 3 亿行的写入和查询。量清楚的是精确去重的内存边界：`count(DISTINCT id)` 约 60–65 B/行，4c16g 在 2 亿行的分区上就 OOM。
+- [x] 实验 34：在 25.8 上核对机制。`FINAL` 的代价跟着 part 之间的重叠走；跳数索引要列值成段聚集才剪得掉；`UUID` 不降去重内存；`PROJECTION` 在 `FINAL` 下不起作用；`is_deleted` 不物理删除；`Decimal(18,8)` 的上限。
+
+**还要做的**
+
+- [ ] 重新压一轮：生成器去掉 `number % 86400000` 的回绕，按生产的迟到、补发、更新比例造重叠；一个脚本跑三档、同一组查询；每条查询跑 5 次取中位数；合并耗时从 `part_log` 取。
+- [ ] 边写边查：按 B/C 档的块大小和速率（production-shape.md 第五节）持续写入，同时跑 `FINAL` 和对账查询。lab 上 8c32g 跑得完 3 亿行，生产上它在这个量级已经吃紧，差的就是这部分负载。
+- [ ] 生产只读核对排序键：`settle_ms` 在结算前后会不会变。会变就不能用 `(settle_ms, id)` 做 `ReplacingMergeTree` 的排序键，`do_not_merge_across_partitions_select_final` 也不能开。
+- [ ] 表结构精简里还没量的：`LowCardinality` 编码列、时间列的 `Delta` 编码、`Decimal(18,8)` 的落盘和耗时；sink 能不能把字符串写进 `UUID` 列。
+- [ ] 历史分区自动收敛：`min_age_to_force_merge_seconds` 在三副本上的效果和代价。
 

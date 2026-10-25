@@ -25,6 +25,7 @@
 | 巡检、误删之后怎么救、复制日志序号到顶 | [docs/daily-checklist.md](docs/daily-checklist.md) | 07、11、13、28 |
 | 查生产 Aiven 集群的架构、三档规格与配置参数 | [docs/aiven-production-specs.md](docs/aiven-production-specs.md) | prod-check |
 | 评估 Aiven 升级 25.8 LTS 的影响、机制变化与换节点重投风险 | [docs/aiven-upgrade-25.8.md](docs/aiven-upgrade-25.8.md) | 12、21、29 |
+| 单日 3 亿行在 25.8 上写不写得进、`FINAL` 和精确去重查不查得动，以及哪些数不能外推 | [docs/scale-300m.md](docs/scale-300m.md) | 30–34（`experiments/scale/`） |
 | 每个实验跑没跑过、过没过 | [docs/Test-Report.md](docs/Test-Report.md) | 全部 |
 | 接下来要做的事：规模验证、生产只读核对、要业务拍板的 | [docs/follow-ups.md](docs/follow-ups.md) | — |
 
@@ -49,9 +50,17 @@ SLOW=1 ./run-all.sh    # 连默认跳过的慢速段一起跑（实验 02、12�
 bash experiments/02-dedup-window-overflow.sh
 ```
 
+规模压测（实验 30–34，ClickHouse 25.8）不走 `cluster.sh`、不进 `run-all.sh`，要先 `./cluster.sh down` 再单独起，用法写在两个 compose 的文件头：
+
+```bash
+docker compose -f docker-compose.scale-single.yml --profile 4c16g up -d   # 单节点，另有 8c32g / 16c64g
+bash experiments/scale/33-scale-4c16g-single-node.sh
+docker compose -f docker-compose.scale-single.yml --profile 4c16g down -v
+```
+
 每个实验脚本自带断言，`[符合]` / `[不符]` 直接打在输出里，退出码非 0 表示有断言没过。注意 `[符合]` 说的是「观测和脚本写死的期望一致」，不是「文章那条断言成立」——脚本写的是修正后的行为，两者的区别见[实验设计](#实验设计)。脚本各自清理自己建的表、topic 和 connector，可以反复跑。
 
-需要 Docker。`results/` 里实验 01–27 跑在 Apple M2 Pro（12 核 / 32 GiB）上的 OrbStack 里，虚拟机 12 CPU / 16 GiB；实验 28 跑在 Apple M5（10 核 / 32 GiB）上。耗时、实验 26 的「不限线程用几个核」都随机器变，换一台机器重跑，这类数字会不一样。ClickHouse 那套镜像约 1 GB，`up` 十几秒；Kafka 栈三个镜像合计约 3.5 GB（有共用层），Connect 起来要二三十秒，第一次 `up all` 还会从 GitHub release 下载约 12 MB 的 connector 插件并校验 sha256（插件不进 git）。`up zk` 多一个约 300 MB 的 ZooKeeper 镜像；实验 28 第一次跑时还要构建一个改快照用的小工具镜像（`tools/zk-cversion`，编译阶段用约 480 MB 的 `eclipse-temurin:17-jdk`）。
+需要 Docker。`results/` 里多数实验跑在 Apple M2 Pro（12 核 / 32 GiB）上的 OrbStack 里，虚拟机 12 CPU / 16 GiB；实验 17、19、29 和规模压测跑在 Apple M5 Max（18 核 / 128 GiB）上，实验 28 跑在 Apple M5（10 核 / 32 GiB）上，每份 log 第一行写了是哪台。耗时、实验 26 的「不限线程用几个核」都随机器变，换一台机器重跑，这类数字会不一样。ClickHouse 那套镜像约 1 GB，`up` 十几秒；Kafka 栈三个镜像合计约 3.5 GB（有共用层），Connect 起来要二三十秒，第一次 `up all` 还会从 GitHub release 下载约 12 MB 的 connector 插件并校验 sha256（插件不进 git）。`up zk` 多一个约 300 MB 的 ZooKeeper 镜像；实验 28 第一次跑时还要构建一个改快照用的小工具镜像（`tools/zk-cversion`，编译阶段用约 480 MB 的 `eclipse-temurin:17-jdk`）。
 
 `results/` 里每份 log 的第一行是这次跑的出处，单跑一个实验也有：
 
@@ -102,12 +111,15 @@ docker-compose.yml         ClickHouse 那套
 docker-compose-kafka.yml   Kafka 栈
 docker-compose-zk.yml      实验 28 的 Apache ZooKeeper（./cluster.sh up zk 叠加）
 docker-compose.prod.yml    生产设置挂载（./cluster.sh up prod 叠加）
+docker-compose.scale-single.yml   规模压测的单节点 ClickHouse 25.8，--profile 4c16g / 8c32g / 16c64g 选档位
+docker-compose.scale-cluster.yml  规模压测的三副本 ClickHouse 25.8，每个节点 4c16g、A 档生产设置
 cfg/                       keeper、cluster、三个节点的 macros、KeeperMap 路径前缀、auxiliary ZooKeeper（aux_zookeeper.xml）
 cfg/prod/                  生产服务端设置与 default profile 约束（A/B/C 三档，脱敏）
 connect-plugins/           up all 时下载的 connector 插件（.gitignore 里，不进 git）
 tools/zk-cversion/         实验 28 改停着的 ZooKeeper 快照里某个节点 cversion 的小工具（实验里自动构建）
-experiments/               28 个实验脚本（15、22 还没建，含 30 规模压测），文件头写了它验的是哪条断言、怎么设计的、参考了什么
-results/                   实跑输出，每份 log 第一行是出处
+experiments/               01–29 的实验脚本（15、22 还没建），文件头写了它验的是哪条断言、怎么设计的、参考了什么
+experiments/scale/         规模压测 30–34（ClickHouse 25.8），不进 run-all.sh，见 docs/scale-300m.md
+results/                   实跑输出，每份 log 第一行是出处；results/scale/ 是规模压测，results/25.8/ 是在 25.8 上复跑的实验
 docs/                      日常排查用的知识和几个方案，索引在 docs/README.md
 ```
 
@@ -166,7 +178,8 @@ docs/                      日常排查用的知识和几个方案，索引在 d
 |---|---|---|
 | 28 | 复制日志 `log/` 的顺序号计数器（ZooKeeper 父节点上的一个 int32）到顶之后 | 每次 INSERT（每个分区一个 part）和每次 merge 各占一个序号；20 次并发的同步 INSERT 占 21 个，同样 20 行走 `async_insert` 只占 1 个。停掉 ZooKeeper 把计数器改到 2147483644（`tools/zk-cversion`），前 4 次 INSERT 把它用到 2147483647，第 5 次起报 `Code: 244 … Node exists, path …/log/log-`；换副本写、`SYSTEM RESTART REPLICA` 都没用，读照常，merge 报 `KEEPER_EXCEPTION`；没有出现文档说的负数名字。zkCli 里的 `cversion` 是「计数器 × 2 − 子节点数」，过了一半就是负数，要看 `system.replicas.log_max_index`。新表（新的 Keeper 路径）+ `ATTACH PARTITION FROM` + `EXCHANGE TABLES` 只用 SQL 就能恢复，三个副本行数一致 |
 | 29 | 服务端异步插入与 `insert_deduplication_token` 联用、攒批减压及切换边界 | 25.3 的 `async_insert_deduplicate` 默认 0：只开 `async_insert = 1` 时，一个刷新桶只保留第 1 条子插入的 token 写进 `blocks/`，第 2..N 条子插入的 token 被丢弃（重投漏拦），且当重投的第 1 条子插入建桶时，同批搭车的全新子插入会被整批判为已去重而静默吞掉！开齐 `async_insert = 1, wait_for_async_insert = 1, async_insert_deduplicate = 1` 并经 HTTP 参数传 token 时，20 条并发小插入合成 1 个 `NewPart`、`log/` 只增 1 条、`async_blocks/` 记下全部 20 个 token（默认窗口 10000），三种重投全部拦住，坏子插入报 `Code: 27` 并单条回滚、不影响同批好数据；若把 `SETTINGS insert_deduplication_token` 写进 SQL 文本内则会按 AST 拆桶导致攒批失效；同步 `blocks/` 与异步 `async_blocks/` 互不查对方 |
-| 30 | 3 节点 4c16gb（Aiven Tier A / business-16）ClickHouse 25.8 LTS 单日分区 3 亿条 ReplacingMergeTree 阶梯式压测 | 用户专项提问 | **无法支撑**：3 亿行宽表单副本落盘 65.52 GiB，Merge 临时空间峰值达 55.45 GiB（单节点瞬时达 120.97 GiB，占 A 档 200 GB 本地盘 60.5%）；后台单个 33.85 GiB 合并耗时超 500 秒，4 vCPU 算力挤占致写入速率崩塌 78.2%（从 2.00M 行/s 跌至 436k 行/s），流式写入必堆 Part 触发 Code 252 `Too many parts`；精准去重/对账（`count(DISTINCT id)`）在 2.2 亿行打爆 9.94 GiB 内存硬限抛 Code 241 OOM；25.8 的 `use_skip_indexes_if_final = 1` 在带跳数索引过滤时提速 2.6～5.9 倍，但全分区统计无法受益、单次耗时达 69.5 秒 |
+
+30–34 是单日 3 亿行在 ClickHouse 25.8 上的规模压测，脚本在 `experiments/scale/`、日志在 `results/scale/`，不进 `run-all.sh`。量清楚的是精确去重的内存边界（`count(DISTINCT id)` 约 60–65 B/行，4c16g 在 2 亿行的分区上就 OOM）；`FINAL` 的耗时、跳数索引的收益、单节点和三副本的差距受数据生成器和同机拓扑影响，不能外推。细节见 [docs/scale-300m.md](docs/scale-300m.md)。
 
 还没做的实验也记在 `docs/` 里，按编号找：
 
@@ -284,4 +297,4 @@ docs/                      日常排查用的知识和几个方案，索引在 d
 - **那次 Keeper 抖动的负载形状。** 生产上是 `zoo_keeper_request` 在途请求从常态 5 到 15 涨到几千。单节点 keeper、没有负载，制造不出同样的排队。实验 12 用冻住容器复现了它对 INSERT 的效果（卡在提交、客户端超时、之后照样提交），但「几千个在途请求」本身没有。
 - **tiered storage 和 S3。** 文章一那笔 856 GiB 分区里重写 11 GiB 的账、文章四里 30 GiB 要从 S3 拉回来的代价，都依赖对象存储那一层。挂 minio 能搭出形状，量不出真实的延迟和费用。实验 20 的硬链接结论也只对本地盘成立。
 - **托管那两层。** ClickHouse 在 Aiven 上：`SHOW CREATE TABLE` 对 avnadmin 被拒、`system.tables.engine_full` 被抹掉、负载均衡把只读副本摘出路由，都是托管服务的行为。sink connector 在 Confluent Cloud 上全托管：运行时的版本、`offset.flush.interval.ms` 之类的 worker 配置都拿不到，lab 一律用 Apache Kafka 3.7.0 的默认值；托管页面上和 Apache Kafka 默认值不同的项（比如 `errors.retry.timeout`），对照见 `docs/mechanism-map.md`。
-- **规模。** 生产上文章里那个 region，单个日分区两亿行、30 GiB，三副本每秒建 124 个块（别的 region 一天从一千多万行到三亿多行不等，见 `docs/production-shape.md` 第二节）；上游是单 topic 8 个分区、峰值每秒 1 万条。本地用的是把窗口压小来等价缩放，验的是机制不是量级；实验 09 的 topic 也建成 8 个分区，但没压吞吐。量级里能带到生产的那部分（内存、磁盘、part 数），打算用更大的机器补，见待建实验 22。
+- **规模。** 生产上文章里那个 region，单个日分区两亿行、30 GiB，三副本每秒建 124 个块（别的 region 一天从一千多万行到三亿多行不等，见 `docs/production-shape.md` 第二节）；上游是单 topic 8 个分区、峰值每秒 1 万条。本地用的是把窗口压小来等价缩放，验的是机制不是量级；实验 09 的 topic 也建成 8 个分区，但没压吞吐。单日 3 亿行的写入、`FINAL` 和精确去重在 25.8 上量过一轮（实验 30–34，[docs/scale-300m.md](docs/scale-300m.md)），但没有生产那种边写边查；去重演练本身（待建实验 22）还没做。

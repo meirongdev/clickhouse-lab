@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # 从 results/*.log 重新生成 docs/Test-Report.md 里两个标记之间的汇总表。只读日志，不碰集群。
+# 子目录里的日志不进这张表：results/scale/ 是规模压测（docs/scale-300m.md），results/25.8/ 是在 25.8 上复跑的实验。
 # run-all.sh 跑完会自动调它；单独补跑了某个实验（输出存进 results/）之后也可以手动跑一次。
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -37,7 +38,6 @@ title() {
     27) echo "引擎迁移：ATTACH + EXCHANGE，在线、可回滚" ;;
     28) echo "ZooKeeper 顺序节点计数器到顶，复制表写不进去" ;;
     29) echo "异步插入与 insert_deduplication_token 联用及边界" ;;
-    30) echo "3 节点 4c16gb 25.8 阶梯压测（10M 至 3 亿行 ReplacingMergeTree）" ;;
     *)  echo "（report.sh 里没登记）" ;;
   esac
 }

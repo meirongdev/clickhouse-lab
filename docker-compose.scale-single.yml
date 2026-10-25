@@ -1,0 +1,50 @@
+# 规模压测用的单节点 ClickHouse 25.8，按档位挑一个 profile 起。三个档位都占 18123，一次只起一个；
+# docker-compose.yml 那套也占 18123，先 ./cluster.sh down。
+#   docker compose -f docker-compose.scale-single.yml --profile 4c16g up -d    # A 档：实验 33、34
+#   docker compose -f docker-compose.scale-single.yml --profile 8c32g up -d    # B 档：实验 31
+#   docker compose -f docker-compose.scale-single.yml --profile 16c64g up -d   # C 档：实验 32
+#   收工：同一条命令把 up -d 换成 down -v
+# 挂的是 cfg/prod/ 对应档位的生产设置，和 ./cluster.sh up prod 同一套。镜像钉法同 docker-compose.yml。
+x-node: &node
+  image: clickhouse/clickhouse-server:25.8.33.6@sha256:0152dd511befe6a2c2ef53e930726179669b08116da78500b37c51c96ff5ee77
+  ulimits: {nofile: {soft: 262144, hard: 262144}}
+  environment: [CLICKHOUSE_SKIP_USER_SETUP=1]
+  ports: ["18123:8123"]
+
+services:
+  ch-4c16g:
+    <<: *node
+    profiles: [4c16g]
+    container_name: ch-4c16g
+    hostname: ch-4c16g
+    cpus: 4
+    mem_limit: 16g
+    volumes:
+      - ./cfg/prod/server.xml:/etc/clickhouse-server/config.d/prod-server.xml:ro
+      - ./cfg/prod/server-A.xml:/etc/clickhouse-server/config.d/prod-server-tier.xml:ro
+      - ./cfg/prod/users.xml:/etc/clickhouse-server/users.d/prod-users.xml:ro
+      - ./cfg/prod/users-A.xml:/etc/clickhouse-server/users.d/prod-users-tier.xml:ro
+  ch-8c32g:
+    <<: *node
+    profiles: [8c32g]
+    container_name: ch-8c32g
+    hostname: ch-8c32g
+    cpus: 8
+    mem_limit: 32g
+    volumes:
+      - ./cfg/prod/server.xml:/etc/clickhouse-server/config.d/prod-server.xml:ro
+      - ./cfg/prod/server-B.xml:/etc/clickhouse-server/config.d/prod-server-tier.xml:ro
+      - ./cfg/prod/users.xml:/etc/clickhouse-server/users.d/prod-users.xml:ro
+      - ./cfg/prod/users-B.xml:/etc/clickhouse-server/users.d/prod-users-tier.xml:ro
+  ch-16c64g:
+    <<: *node
+    profiles: [16c64g]
+    container_name: ch-16c64g
+    hostname: ch-16c64g
+    cpus: 16
+    mem_limit: 64g
+    volumes:
+      - ./cfg/prod/server.xml:/etc/clickhouse-server/config.d/prod-server.xml:ro
+      - ./cfg/prod/server-C.xml:/etc/clickhouse-server/config.d/prod-server-tier.xml:ro
+      - ./cfg/prod/users.xml:/etc/clickhouse-server/users.d/prod-users.xml:ro
+      - ./cfg/prod/users-C.xml:/etc/clickhouse-server/users.d/prod-users-tier.xml:ro

@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
-# 实验 31：单节点 8c32gb（Aiven Tier B / business-32 规格）ClickHouse 25.8 LTS
-#          单日分区 3 亿条 ReplacingMergeTree 阶梯式压测验证与单节点 vs 3 节点能力评估
+# 实验 31：单节点 8c32g（B 档生产设置）、ClickHouse 25.8，单日分区 10M → 3 亿行的阶梯压测
 #
-# 压测目标：
-#   验证在单节点 8 vCPU / 32 GB 容器限制（max_server_memory_usage ≈ 23.10 GB，max_threads = 8）
-#   以及 ClickHouse 25.8 LTS 官方镜像下，采用生产 34 列宽表 + 8 个跳数索引的 ReplacingMergeTree，
-#   单日分区从 1000 万 -> 5000 万 -> 1 亿 -> 2 亿 -> 3 亿行阶梯递增时的：
-#     1) 单节点 8 vCPU 写入吞吐与 Part 合并速率（对比 4c16g 吞吐）；
-#     2) 磁盘空间占用与压缩比；
-#     3) SELECT ... FINAL 的耗时与内存开销；
-#     4) 关键高基数验证：SELECT count(DISTINCT id) 是否能在 23.1 GB 内存上限内完成 3 亿行去重（4c16g 在 2.2 亿时 OOM 崩溃）；
-#     5) 为用户解答「单节点能支持是否意味着 Aiven 3 节点 8c32g 也能支持？性能差异在哪些环节？」。
+# 量什么（不带断言，只记录；结论和局限见 docs/scale-300m.md）：
+#   34 列宽表 + 8 个跳数索引的 ReplacingMergeTree，每档写完之后记写入速率、part 数、落盘，以及
+#   Q1 count()、Q2 count() FINAL、Q3 count(DISTINCT id)、Q4 四个聚合的 FINAL、Q5 FINAL WHERE user_id = 100042，各跑 1 次。
+# 和实验 33（4c16g）不是同一口径，横着比要扣掉这几处：
+#   - 表的最后 4 列（create_ms、update_ms、settle_ms、settle_dt）和 8 个跳数索引的定义不同；
+#   - Q3–Q5 和实验 33 的 Q3–Q5 是不同的 SQL；
+#   - 写完不等 3 秒就测，测量时未合并的 part 更多；重复键注入在每档末尾（33 在开头）。
+# 数据生成的偏差同实验 30：键范围在 8640 万行之后回绕；user_id 均匀随机，Q5 的 minmax 索引剪不掉 granule。
+# 部署：docker compose -f docker-compose.scale-single.yml --profile 8c32g up -d
 #
 # 阶梯档位（可由环境变量 TIERS 覆盖，默认 10M 50M 100M 200M 300M）：
 #   Tier 1:  10,000,000 行（10M）
@@ -20,7 +19,7 @@
 #   Tier 5: 300,000,000 行（300M）
 
 set -uo pipefail
-source "$(dirname "$0")/../lib.sh"
+source "$(dirname "$0")/../../lib.sh"
 
 TIERS_STR=${TIERS:-"10000000 50000000 100000000 200000000 300000000"}
 IFS=' ' read -r -a TIER_LIST <<< "$TIERS_STR"
@@ -28,6 +27,8 @@ BATCH_SIZE=${BATCH_SIZE:-5000000}       # 每次 INSERT 500 万行
 DUP_BATCH_SIZE=${DUP_BATCH:-50000}      # 每个阶梯注入 5 万行重复键（带高版本 rev=2）
 PARTITION_DAY=1774310400000             # 2026-03-24 00:00:00 UTC (Partition: 20260324)
 TABLE="events_wide_scale_8c32g"
+CONTAINER=${CONTAINER:-ch-8c32g}
+CH1_CONTAINER=$CONTAINER                # 出处行读这个容器的镜像
 
 provenance
 section "环境与配置前置核对（单节点 8c32gb 生产 B 档形态）"
@@ -50,7 +51,7 @@ printf "写入线程数 max_insert_threads: %s\n" "$MAX_INSERT_THREADS"
 printf "25.8 新特性 use_skip_indexes_if_final: %s\n" "$USE_SKIP_FINAL"
 
 # 核对容器 cgroup 限制
-DK_STATS=$(docker stats --no-stream ch-8c32g 2>/dev/null || true)
+DK_STATS=$(docker stats --no-stream "$CONTAINER" 2>/dev/null || true)
 echo -e "\nDocker 容器实时限额状态:"
 echo "$DK_STATS"
 
@@ -310,7 +311,7 @@ for TARGET_ROWS in "${TIER_LIST[@]}"; do
   R_Q2=$(measure_query "SELECT count() FROM $TABLE FINAL" "${TAG_PREFIX}_q2")
   echo "$R_Q2"
   
-  # Q3: 高基数全量 SELECT count(DISTINCT id)（4c16g 2.2亿时在此处 OOM 崩溃）
+  # Q3: 全量 count(DISTINCT id)（4c16g 在 2 亿行的分区上就 OOM，见实验 33）
   echo -n "  [Q3 全量 count(DISTINCT id)] ... "
   R_Q3=$(measure_query "SELECT count(DISTINCT id) FROM $TABLE" "${TAG_PREFIX}_q3")
   echo "$R_Q3"
@@ -320,7 +321,7 @@ for TARGET_ROWS in "${TIER_LIST[@]}"; do
   R_Q4=$(measure_query "SELECT sum(net), avg(turnover), min(amount), max(payout) FROM $TABLE FINAL" "${TAG_PREFIX}_q4")
   echo "$R_Q4"
   
-  # Q5: 跳数索引过滤查询 user_id = 100042 FINAL（验证 25.8 use_skip_indexes_if_final）
+  # Q5: FINAL WHERE user_id = 100042（user_id 均匀随机，minmax 剪不掉，见文件头）
   echo -n "  [Q5 跳数索引过滤 FINAL (user_id=100042)] ... "
   R_Q5=$(measure_query "SELECT count() FROM $TABLE FINAL WHERE user_id = 100042" "${TAG_PREFIX}_q5")
   echo "$R_Q5"

@@ -3,6 +3,7 @@
 # 输出同时存进 results/，最后生成 docs/Test-Report.md。
 # SLOW=1 ./run-all.sh 会带上默认跳过的慢速段（实验 02 多等约 5 分钟、实验 12 多等约 2.5 分钟、实验 13 多等约 8 分钟）。
 # results/ 里提交的 log 应该是 SLOW=1 跑出来的：每份 log 第一行的出处会注明 SLOW=1，最后一行是退出码。
+# 只跑 experiments/ 这一层；experiments/scale/ 的规模压测要单独起 25.8 的环境，见 docs/scale-300m.md。
 set -uo pipefail
 cd "$(dirname "$0")"
 

@@ -1,6 +1,7 @@
 # 生产形态的设置（opt-in）：叠在 docker-compose.yml 上，由 ./cluster.sh up prod 带上。说明见 cfg/prod/README.md。
 # 档位用 TIER=A|B|C 选（默认 A），对应 docs/production-shape.md 第二节的三档节点规格。
-# 只加挂配置文件，不限 CPU 和内存：规模实验的限额另放（docs/plan-scale-dedup.md 第八节的 docker-compose.scale.yml）。
+# 只加挂配置文件，不限 CPU 和内存：带限额的是规模压测那两个 compose（docker-compose.scale-single.yml、
+# docker-compose.scale-cluster.yml，实验 30–34），待建实验 22 的另见 docs/plan-scale-dedup.md 第八节。
 # 服务端的 max_server_memory_usage 超过容器看得到的内存 × 0.9 时，ClickHouse 会自己降下来，所以笔记本上也起得来。
 x-prod-cfg: &prod_cfg
   - ./cfg/prod/server.xml:/etc/clickhouse-server/config.d/prod-server.xml:ro

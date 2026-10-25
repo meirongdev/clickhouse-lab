@@ -1,38 +1,40 @@
 #!/usr/bin/env bash
-# 实验 33：单节点 4c16gb（Aiven Tier A / business-16 的单个节点规格）ClickHouse 25.8 LTS
-#          与实验 30（3 节点 4c16gb 集群）做同口径对照
+# 实验 30：三副本 4c16g（每个节点 A 档生产设置）、ClickHouse 25.8，单日分区 10M → 3 亿行的阶梯压测
 #
-# 对照原则：除「单节点 + 非复制引擎」外，其余与实验 30 完全一致——
-#   同一张 34 列表结构与 8 个跳数索引、同一份数据生成 SQL、同样每批 500 万行、
-#   同样每档在 numbers(0, 5 万) 注入 rev=2 重复行、同样 sleep 3 后测 Q1–Q4、每个查询同样只跑 1 次。
-#   生产 A 档设置（cfg/prod/server.xml + server-A.xml、users.xml + users-A.xml）也相同。
-#   部署：docker-compose.scale-4c16g-single.yml（cpus: 4, mem_limit: 16g）。
-#
-# 相比实验 30 新增（放在 Q1–Q4 之后，不影响同口径对照）：
-#   Q5 SELECT count(DISTINCT id)：实验 30 脚本本身没有执行这条查询（其日志里的 OOM 段落不是脚本输出），
-#      这里在脚本内实测，单节点内存上限与 3 节点里每个节点相同（9.94 GiB）。
-#   Tier 5 结束后 Q2 再重复 2 次，量化单次测量的噪声。
+# 量什么（不带断言，只记录；结论和局限见 docs/scale-300m.md）：
+#   生产 34 列宽表 + 8 个跳数索引的 ReplicatedReplacingMergeTree，每档写完之后记
+#     1) 写入速率、三个副本的 active part 数与落盘、复制队列；
+#     2) Q1 count()、Q2 count() FINAL、Q3 count() FINAL WHERE tenant_id = 5、Q4 按 tenant_id 分组的 FINAL，
+#        耗时与内存各跑 1 次。
+# 读结果之前要知道的：
+#   - 三个副本和 Keeper 在同一台机器、同一块盘上，每个副本各自 merge。实验 33 只把拓扑换成单节点
+#     （表、数据、Q1–Q4、等待都一样），两者的差距是这个拓扑的代价，不能当成 Aiven 三台独立 VM 的数。
+#   - settle_ms = base + number % 86400000：写到 8640 万行之后键范围回绕，后写的 part 和先写的 part 重叠，
+#     FINAL 耗时随行数的增长主要来自这里（实验 34）。
+#   - tenant_id 均匀随机，Q3 的跳数索引剪不掉 granule（read_rows 和 Q2 相同），测不了 use_skip_indexes_if_final。
+#   - 不跑 count(DISTINCT id)，精确去重的内存边界看实验 33。
 #
 # 阶梯档位（可由环境变量 TIERS 覆盖，默认 10M 50M 100M 200M 300M）：
-#   Tier 1:  10,000,000 行（10M，A 档生产真实单日基准）
-#   Tier 2:  50,000,000 行（50M，5 倍基准）
-#   Tier 3: 100,000,000 行（100M，10 倍基准）
-#   Tier 4: 200,000,000 行（200M，B 档生产单日规模）
-#   Tier 5: 300,000,000 行（300M，C 档生产单日规模，目标提问上限）
+#   Tier 1:  10,000,000 行（A 档生产单日是一千多万行）
+#   Tier 2:  50,000,000 行
+#   Tier 3: 100,000,000 行
+#   Tier 4: 200,000,000 行（B 档生产单日规模）
+#   Tier 5: 300,000,000 行（C 档生产单日规模）
+#
+# 部署：docker compose -f docker-compose.scale-cluster.yml up -d
 
 set -uo pipefail
-source "$(dirname "$0")/../lib.sh"
+source "$(dirname "$0")/../../lib.sh"
 
 TIERS_STR=${TIERS:-"10000000 50000000 100000000 200000000 300000000"}
 IFS=' ' read -r -a TIER_LIST <<< "$TIERS_STR"
 BATCH_SIZE=${BATCH_SIZE:-5000000}       # 每次 INSERT 500 万行
 DUP_BATCH_SIZE=${DUP_BATCH:-50000}      # 每个阶梯注入 5 万行重复键（带高版本 rev=2）
 PARTITION_DAY=1774310400000             # 2026-03-24 00:00:00 UTC (Partition: 20260324)
-TABLE="events_wide_scale_single"
-CONTAINER=${CONTAINER:-ch-4c16g}
+TABLE="events_wide_scale"
 
 provenance
-section "环境与配置前置核对（单节点 4c16gb 生产 A 档形态）"
+section "环境与配置前置核对（3 节点 4c16gb 生产 A 档形态）"
 
 CH_VER=$(q1 "SELECT version()" | tr -d '\n')
 echo "ClickHouse 节点版本: $CH_VER"
@@ -40,30 +42,35 @@ if [[ "$CH_VER" != 25.8* ]]; then
   echo "[警告] 当前版本并非 25.8 LTS ($CH_VER)，压测建议在 25.8 环境下执行"
 fi
 
+REPLICA_COUNT=$(q1 "SELECT count() FROM clusterAllReplicas('default', system.one)" | tr -d '\n')
+echo "集群在线副本数: $REPLICA_COUNT"
+if [ "$REPLICA_COUNT" != "3" ]; then
+  echo "[错误] 期望 3 副本在线，当前只有 $REPLICA_COUNT 个" >&2
+  exit 1
+fi
+
 MAX_SERVER_MEM=$(q1 "SELECT value FROM system.server_settings WHERE name = 'max_server_memory_usage'" | tr -d '\n')
 MAX_CONC_Q=$(q1 "SELECT value FROM system.server_settings WHERE name = 'max_concurrent_queries'" | tr -d '\n')
 MAX_THREADS=$(q1 "SELECT getSetting('max_threads')" | tr -d '\n')
 MAX_INSERT_THREADS=$(q1 "SELECT getSetting('max_insert_threads')" | tr -d '\n')
 USE_SKIP_FINAL=$(q1 "SELECT getSetting('use_skip_indexes_if_final')" | tr -d '\n')
-BG_POOL=$(q1 "SELECT value FROM system.server_settings WHERE name = 'background_pool_size'" | tr -d '\n')
 
 printf "服务端内存上限: %s（%s 字节）\n" "$(q1 "SELECT formatReadableSize($MAX_SERVER_MEM)" | tr -d '\n')" "$MAX_SERVER_MEM"
 printf "服务端最大并发: %s\n" "$MAX_CONC_Q"
-printf "后台合并线程池 background_pool_size: %s\n" "$BG_POOL"
 printf "查询线程数 max_threads: %s\n" "$MAX_THREADS"
 printf "写入线程数 max_insert_threads: %s\n" "$MAX_INSERT_THREADS"
 printf "25.8 新特性 use_skip_indexes_if_final: %s\n" "$USE_SKIP_FINAL"
 
 # 核对容器 cgroup 限制
-DK_STATS=$(docker stats --no-stream "$CONTAINER" 2>&1)
+DK_STATS=$(docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}" | grep -E "ch1|ch2|ch3|NAME")
 echo -e "\nDocker 容器实时资源限额状态:"
 echo "$DK_STATS"
 
-section "初始化压测表: $TABLE (ReplacingMergeTree 非复制, 34 列, 8 跳数索引)"
+section "初始化压测表: $TABLE (ReplicatedReplacingMergeTree, 34 列, 8 跳数索引)"
 
-q1 "DROP TABLE IF EXISTS $TABLE SYNC" >/dev/null
+q1 "DROP TABLE IF EXISTS $TABLE ON CLUSTER default SYNC" >/dev/null
 
-q1 "CREATE TABLE $TABLE
+q1 "CREATE TABLE $TABLE ON CLUSTER default
 (
     id             String,
     ext_id         String,
@@ -108,13 +115,13 @@ q1 "CREATE TABLE $TABLE
     INDEX id_bf_idx              id                   TYPE bloom_filter GRANULARITY 12,
     INDEX batch_src_ref_bf_idx   (batch_ref, src_ref) TYPE bloom_filter GRANULARITY 12
 )
-ENGINE = ReplacingMergeTree(rev)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/$TABLE', '{replica}', rev)
 PARTITION BY toYYYYMMDD(toDateTime(settle_ms / 1000))
 ORDER BY (settle_ms, id)
 PRIMARY KEY (settle_ms, id)
 SETTINGS index_granularity = 8192"
 
-echo "表结构创建成功（单节点，非复制）。"
+echo "表结构创建成功，已同步至 3 副本。"
 
 # 执行单条查询并从 system.query_log 获取耗时、峰值内存、读取行数和报错信息
 measure_query() {
@@ -271,10 +278,10 @@ for TARGET_ROWS in "${TIER_LIST[@]}"; do
 
   CURRENT_TOTAL_ROWS=$TARGET_ROWS
   
-  # 与实验 30 保持一致：等待 3 秒再测量
+  # 等待 3 秒观察副本同步
   sleep 3
   
-  echo -e "\n--- [1] 物理存储与 Part 状态 (单节点) ---"
+  echo -e "\n--- [1] 物理存储与 Part 状态 (ch1 单节点与集群多副本) ---"
   PARTS_INFO=$(q1 "SELECT count(), sum(rows), formatReadableSize(sum(bytes_on_disk)),
                           formatReadableSize(sum(data_uncompressed_bytes)),
                           round(sum(data_uncompressed_bytes) / sum(bytes_on_disk), 2),
@@ -282,92 +289,93 @@ for TARGET_ROWS in "${TIER_LIST[@]}"; do
                    FROM system.parts
                    WHERE table = '$TABLE' AND active FORMAT TSV")
   IFS=$'\t' read -r CH1_PARTS CH1_ROWS CH1_DISK CH1_UNCOMP CH1_RATIO CH1_BPR <<< "$PARTS_INFO"
-
-  printf "物理 Part 数: %s | 物理行数: %s | 落盘大小: %s | 未压缩: %s | 压缩比: %s | 字节/行: %s B\n" \
+  
+  printf "ch1 物理 Part 数: %s | 物理行数: %s | 落盘大小: %s | 未压缩: %s | 压缩比: %s | 字节/行: %s B\n" \
          "$CH1_PARTS" "$CH1_ROWS" "$CH1_DISK" "$CH1_UNCOMP" "$CH1_RATIO" "$CH1_BPR"
-
-  echo -e "\n--- [2] 后台 Merge 状态 ---"
-  MERGE_INFO=$(q1 "SELECT count(), formatReadableSize(sum(total_size_bytes_compressed)), round(max(elapsed), 1), round(max(progress) * 100, 1)
-                   FROM system.merges WHERE table = '$TABLE' FORMAT TSV")
-  IFS=$'\t' read -r ACTIVE_MERGES MERGE_BYTES MERGE_MAX_SEC MERGE_MAX_PROG <<< "$MERGE_INFO"
-  printf "当前后台正在运行的 Merge 任务数: %s（合并源总量 %s，最长已运行 %ss，最高进度 %s%%）\n" \
-         "$ACTIVE_MERGES" "$MERGE_BYTES" "$MERGE_MAX_SEC" "$MERGE_MAX_PROG"
-
+  
+  CLUSTER_PARTS=$(q1 "SELECT hostName(), count(), sum(rows), formatReadableSize(sum(bytes_on_disk))
+                      FROM clusterAllReplicas('default', system.parts)
+                      WHERE table = '$TABLE' AND active
+                      GROUP BY hostName() ORDER BY hostName() FORMAT TSV")
+  echo "三副本落盘分布:"
+  echo "$CLUSTER_PARTS" | while IFS=$'\t' read -r h p r b; do
+    printf "  · %s: %s parts, %s 行, 落盘 %s\n" "$h" "$p" "$r" "$b"
+  done
+  
+  echo -e "\n--- [2] 副本同步队列与延迟状态 ---"
+  REPL_INFO=$(q1 "SELECT hostName(), replica_name, queue_size, inserts_in_queue, merges_in_queue, absolute_delay, is_readonly
+                  FROM clusterAllReplicas('default', system.replicas)
+                  WHERE table = '$TABLE' FORMAT TSV")
+  echo "$REPL_INFO" | while IFS=$'\t' read -r h r q i m d ro; do
+    printf "  · %s (%s): 队列深度=%s (写入=%s, 合并=%s), 滞后=%ss, 只读=%s\n" "$h" "$r" "$q" "$i" "$m" "$d" "$ro"
+  done
+  
+  ACTIVE_MERGES=$(q1 "SELECT count() FROM system.merges WHERE table = '$TABLE'" | tr -d '\n')
+  printf "当前后台正在运行的 Merge 任务数: %s\n" "$ACTIVE_MERGES"
+  
   echo -e "\n--- [3] 查询与 FINAL 去重压力测试 (4 vCPU / 16 GB 容器上限) ---"
-
-  # Q1–Q4 与实验 30 完全相同（tag 前缀改为 exp33，避免与实验 30 的 query_log 混淆）
+  
+  # Q1: 普通 count() (快速元数据/普通流式扫)
   printf "  · Q1 [普通 count() 无 FINAL]: "
-  OUT_Q1=$(measure_query "SELECT count() FROM $TABLE" "exp33_q1_${TARGET_ROWS}")
+  OUT_Q1=$(measure_query "SELECT count() FROM $TABLE" "exp30_q1_${TARGET_ROWS}")
   echo "$OUT_Q1"
-
+  
+  # Q2: count() FINAL (核心考验: ReplacingSortedTransform 多路归并状态)
   printf "  · Q2 [count() FINAL 全去重]: "
-  OUT_Q2=$(measure_query "SELECT count() FROM $TABLE FINAL" "exp33_q2_${TARGET_ROWS}")
+  OUT_Q2=$(measure_query "SELECT count() FROM $TABLE FINAL" "exp30_q2_${TARGET_ROWS}")
   echo "$OUT_Q2"
-
+  
+  # Q3: 带过滤的 FINAL（tenant_id 均匀随机，跳数索引剪不掉，见文件头）
   printf "  · Q3 [带 tenant_id=5 过滤 FINAL]: "
-  OUT_Q3=$(measure_query "SELECT count() FROM $TABLE FINAL WHERE tenant_id = 5" "exp33_q3_${TARGET_ROWS}")
+  OUT_Q3=$(measure_query "SELECT count() FROM $TABLE FINAL WHERE tenant_id = 5" "exp30_q3_${TARGET_ROWS}")
   echo "$OUT_Q3"
-
+  
+  # Q4: 按 tenant_id 分组的 FINAL（只有 20 组）
   printf "  · Q4 [GROUP BY tenant_id 聚合 FINAL]: "
-  OUT_Q4=$(measure_query "SELECT tenant_id, count(), sum(amount), sum(payout) FROM $TABLE FINAL GROUP BY tenant_id ORDER BY tenant_id FORMAT Null" "exp33_q4_${TARGET_ROWS}")
+  OUT_Q4=$(measure_query "SELECT tenant_id, count(), sum(amount), sum(payout) FROM $TABLE FINAL GROUP BY tenant_id ORDER BY tenant_id FORMAT Null" "exp30_q4_${TARGET_ROWS}")
   echo "$OUT_Q4"
-
-  # Q5（新增）：全量精确去重，脚本内实测 OOM 边界
-  printf "  · Q5 [count(DISTINCT id) 精确去重]: "
-  OUT_Q5=$(measure_query "SELECT count(DISTINCT id) FROM $TABLE" "exp33_q5_${TARGET_ROWS}")
-  echo "$OUT_Q5"
-
+  
   echo -e "\n--- [4] 宿主机与 Docker 容器负载 ---"
-  docker stats --no-stream "$CONTAINER" 2>&1
+  DK_STATS_CUR=$(docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}" | grep -E "ch1|ch2|ch3|NAME")
+  echo "$DK_STATS_CUR"
+  
+  # 记录汇总数据（使用分号分隔字段，避免与 query 输出内部的竖线冲突）
+  SUMMARY_ROWS+=("$TIER_IDX;$TARGET_ROWS;$CH1_ROWS;$CH1_PARTS;$CH1_DISK;$CH1_BPR;$TOTAL_INGEST_SEC;$INGEST_RATE;$OUT_Q1;$OUT_Q2;$OUT_Q3;$OUT_Q4")
 
-  SUMMARY_ROWS+=("$TIER_IDX;$TARGET_ROWS;$CH1_ROWS;$CH1_PARTS;$CH1_DISK;$CH1_BPR;$TOTAL_INGEST_SEC;$INGEST_RATE;$OUT_Q1;$OUT_Q2;$OUT_Q3;$OUT_Q4;$OUT_Q5;$ACTIVE_MERGES")
-
-  if [[ "$OUT_Q5" =~ "FAIL" ]]; then
-    echo -e "\n[OOM 警戒] 当前阶梯 ($TARGET_ROWS 行) count(DISTINCT id) 触发失败：$OUT_Q5"
+  # 如果 Q2 或 Q4 触发了 OOM 报错，做详细记录
+  if [[ "$OUT_Q2" =~ "FAIL" ]] || [[ "$OUT_Q4" =~ "FAIL" ]]; then
+    echo -e "\n[OOM 警戒] 当前阶梯 ($TARGET_ROWS 行) 在 16 GB 容器限制下触发了内存上限熔断！"
   fi
-
+  
   TIER_IDX=$((TIER_IDX + 1))
 done
 
-section "噪声评估：Tier 末档 Q2 count() FINAL 再重复 2 次"
-for i in 2 3; do
-  printf "  · Q2 第 %s 次: " "$i"
-  measure_query "SELECT count() FROM $TABLE FINAL" "exp33_q2_repeat${i}_${CURRENT_TOTAL_ROWS}"
-  echo
-done
-q1 "SELECT count(), round(max(elapsed), 1) FROM system.merges WHERE table = '$TABLE' FORMAT TSV" | \
-  { IFS=$'\t' read -r m s; echo "  重复测量结束时后台 Merge: $m 个（最长已运行 ${s}s）"; }
-
-section "压测汇总统计与分析（单节点 4c16gb 生产 A 档形态）"
+section "压测汇总统计与分析（3 节点 4c16gb 生产 A 档形态）"
 
 echo "### 表 1：阶梯写入与物理存储演进"
-echo "| 阶梯 | 目标逻辑行 | 物理落盘行 | Active Parts | 落盘 | 字节/行 | 写入耗时 | 写入速率 | 测量时 Merge 数 |"
-echo "|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|"
+echo "| 阶梯 | 目标逻辑行 | 物理落盘行 | Active Parts | 单副本落盘 | 字节/行 | 写入耗时 | 写入速率 |"
+echo "|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|"
 for row in "${SUMMARY_ROWS[@]}"; do
-  IFS=';' read -r t_idx t_rows c_rows c_parts c_disk c_bpr t_sec t_rate q1 q2 q3 q4 q5 merges <<< "$row"
-  printf "| Tier %s | %s | %s | %s | %s | %s B | %ss | %s 行/s | %s |\n" \
+  IFS=';' read -r t_idx t_rows c_rows c_parts c_disk c_bpr t_sec t_rate q1 q2 q3 q4 <<< "$row"
+  printf "| Tier %s | %s | %s | %s | %s | %s B | %ss | %s 行/s |\n" \
          "$t_idx" "$(q1 "SELECT formatReadableQuantity($t_rows)" | tr -d '\n')" \
          "$(q1 "SELECT formatReadableQuantity($c_rows)" | tr -d '\n')" \
          "$c_parts" "$c_disk" "$c_bpr" "$t_sec" \
-         "$(q1 "SELECT formatReadableQuantity($t_rate)" | tr -d '\n')" "$merges"
+         "$(q1 "SELECT formatReadableQuantity($t_rate)" | tr -d '\n')"
 done
 
 echo -e "\n### 表 2：ReplacingMergeTree FINAL 查询与内存耗费（4 vCPU / 16 GB 约束）"
-echo "| 阶梯 | 目标行数 | Q1 普通 count() | Q2 count() FINAL | Q3 tenant_id=5 FINAL | Q4 GROUP BY FINAL | Q5 count(DISTINCT id) |"
-echo "|:---:|:---:|:---:|:---:|:---:|:---:|:---:|"
-fmt_stat() {
-  local s="$1"
-  if [[ "$s" == FAIL* ]]; then
-    printf "FAIL %s / %s %s" "$(echo "$s" | cut -d'|' -f2)" "$(echo "$s" | cut -d'|' -f3)" "$(echo "$s" | cut -d'|' -f5 | cut -c1-12)"
-  else
-    printf "%s / %s" "$(echo "$s" | cut -d'|' -f2)" "$(echo "$s" | cut -d'|' -f3)"
-  fi
-}
+echo "| 阶梯 | 目标行数 | Q1 普通 count() (耗时/内存) | Q2 count() FINAL (耗时/内存) | Q3 tenant_id=5 FINAL (耗时/内存) | Q4 GROUP BY FINAL (耗时/内存) |"
+echo "|:---:|:---:|:---:|:---:|:---:|:---:|"
 for row in "${SUMMARY_ROWS[@]}"; do
-  IFS=';' read -r t_idx t_rows c_rows c_parts c_disk c_bpr t_sec t_rate q1 q2 q3 q4 q5 merges <<< "$row"
-  printf "| Tier %s | %s | %s | %s | %s | %s | %s |\n" \
+  IFS=';' read -r t_idx t_rows c_rows c_parts c_disk c_bpr t_sec t_rate q1 q2 q3 q4 <<< "$row"
+  q1_stat="$(echo "$q1" | cut -d'|' -f2) / $(echo "$q1" | cut -d'|' -f3)"
+  q2_stat="$(echo "$q2" | cut -d'|' -f2) / $(echo "$q2" | cut -d'|' -f3)"
+  q3_stat="$(echo "$q3" | cut -d'|' -f2) / $(echo "$q3" | cut -d'|' -f3)"
+  q4_stat="$(echo "$q4" | cut -d'|' -f2) / $(echo "$q4" | cut -d'|' -f3)"
+  printf "| Tier %s | %s | %s | %s | %s | %s |\n" \
          "$t_idx" "$(q1 "SELECT formatReadableQuantity($t_rows)" | tr -d '\n')" \
-         "$(fmt_stat "$q1")" "$(fmt_stat "$q2")" "$(fmt_stat "$q3")" "$(fmt_stat "$q4")" "$(fmt_stat "$q5")"
+         "$q1_stat" "$q2_stat" "$q3_stat" "$q4_stat"
 done
 
 echo -e "\n压测全部完成。"

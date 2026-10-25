@@ -1,24 +1,19 @@
-# 3-node ClickHouse 25.8 Scale Test Cluster
-# Limits: 4 vCPU / 16 GB per node (Aiven Tier A business-16)
-# Config: Production Tier A settings (cfg/prod/server.xml, server-A.xml, users.xml, users-A.xml)
-
-x-prod-cfg: &prod_cfg
-  - ./cfg/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
-  - ./cfg/keeper_map.xml:/etc/clickhouse-server/config.d/keeper_map.xml:ro
-  - ./cfg/prod/server.xml:/etc/clickhouse-server/config.d/prod-server.xml:ro
-  - ./cfg/prod/server-A.xml:/etc/clickhouse-server/config.d/prod-server-tier.xml:ro
-  - ./cfg/prod/users.xml:/etc/clickhouse-server/users.d/prod-users.xml:ro
-  - ./cfg/prod/users-A.xml:/etc/clickhouse-server/users.d/prod-users-tier.xml:ro
-
+# 规模压测用的三副本 ClickHouse 25.8（实验 30；results/25.8/ 里在 25.8 上复跑的实验 29 也用它）。
+# 每个节点 4 vCPU / 16 GB，挂 A 档生产设置（cfg/prod/server.xml + server-A.xml、users.xml + users-A.xml）。
+# 服务名、容器名、端口和 docker-compose.yml 那套相同：起这一套会把那一套的容器替换掉，回去跑 01–29 之前先 down。
+#   docker compose -f docker-compose.scale-cluster.yml up -d
+#   docker compose -f docker-compose.scale-cluster.yml down -v
+# 副本应答之后 Keeper 会话还要过一会儿才连上，刚起来就跑 ON CLUSTER 的建表可能落空：
+# 三个节点上 SELECT count() FROM system.zookeeper WHERE path = '/' 都有返回再开跑。
+# 三个副本和 Keeper 挤在同一台机器、同一块盘上，每个副本各自 merge，这里量到的耗时不能当成三台独立 VM 的数
+# （docs/scale-300m.md）。镜像钉法同 docker-compose.yml；实验 30–33 的日志记的服务端版本就是 25.8.33.6。
 services:
   keeper:
-    image: clickhouse/clickhouse-keeper:25.8
+    image: clickhouse/clickhouse-keeper:25.8.33.6@sha256:86ef98ab9c41998c562806a062ef1079af07755f6bcec0a46e9caa9b7a4b4253
     container_name: ch-keeper
-    volumes:
-      - ./cfg/keeper.xml:/etc/clickhouse-keeper/keeper_config.xml:ro
-
-  ch1:
-    image: clickhouse/clickhouse-server:25.8
+    volumes: [./cfg/keeper.xml:/etc/clickhouse-keeper/keeper_config.xml:ro]
+  ch1: &node
+    image: clickhouse/clickhouse-server:25.8.33.6@sha256:0152dd511befe6a2c2ef53e930726179669b08116da78500b37c51c96ff5ee77
     container_name: ch1
     hostname: ch1
     depends_on: [keeper]
@@ -27,46 +22,34 @@ services:
     ulimits: {nofile: {soft: 262144, hard: 262144}}
     environment: [CLICKHOUSE_SKIP_USER_SETUP=1]
     volumes:
-      - ./cfg/macros-ch1.xml:/etc/clickhouse-server/config.d/macros.xml:ro
       - ./cfg/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ./cfg/macros-ch1.xml:/etc/clickhouse-server/config.d/macros.xml:ro
       - ./cfg/keeper_map.xml:/etc/clickhouse-server/config.d/keeper_map.xml:ro
       - ./cfg/prod/server.xml:/etc/clickhouse-server/config.d/prod-server.xml:ro
       - ./cfg/prod/server-A.xml:/etc/clickhouse-server/config.d/prod-server-tier.xml:ro
       - ./cfg/prod/users.xml:/etc/clickhouse-server/users.d/prod-users.xml:ro
       - ./cfg/prod/users-A.xml:/etc/clickhouse-server/users.d/prod-users-tier.xml:ro
     ports: ["18123:8123"]
-
   ch2:
-    image: clickhouse/clickhouse-server:25.8
+    <<: *node
     container_name: ch2
     hostname: ch2
-    depends_on: [keeper]
-    cpus: 4
-    mem_limit: 16g
-    ulimits: {nofile: {soft: 262144, hard: 262144}}
-    environment: [CLICKHOUSE_SKIP_USER_SETUP=1]
     volumes:
-      - ./cfg/macros-ch2.xml:/etc/clickhouse-server/config.d/macros.xml:ro
       - ./cfg/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ./cfg/macros-ch2.xml:/etc/clickhouse-server/config.d/macros.xml:ro
       - ./cfg/keeper_map.xml:/etc/clickhouse-server/config.d/keeper_map.xml:ro
       - ./cfg/prod/server.xml:/etc/clickhouse-server/config.d/prod-server.xml:ro
       - ./cfg/prod/server-A.xml:/etc/clickhouse-server/config.d/prod-server-tier.xml:ro
       - ./cfg/prod/users.xml:/etc/clickhouse-server/users.d/prod-users.xml:ro
       - ./cfg/prod/users-A.xml:/etc/clickhouse-server/users.d/prod-users-tier.xml:ro
     ports: ["18124:8123"]
-
   ch3:
-    image: clickhouse/clickhouse-server:25.8
+    <<: *node
     container_name: ch3
     hostname: ch3
-    depends_on: [keeper]
-    cpus: 4
-    mem_limit: 16g
-    ulimits: {nofile: {soft: 262144, hard: 262144}}
-    environment: [CLICKHOUSE_SKIP_USER_SETUP=1]
     volumes:
-      - ./cfg/macros-ch3.xml:/etc/clickhouse-server/config.d/macros.xml:ro
       - ./cfg/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ./cfg/macros-ch3.xml:/etc/clickhouse-server/config.d/macros.xml:ro
       - ./cfg/keeper_map.xml:/etc/clickhouse-server/config.d/keeper_map.xml:ro
       - ./cfg/prod/server.xml:/etc/clickhouse-server/config.d/prod-server.xml:ro
       - ./cfg/prod/server-A.xml:/etc/clickhouse-server/config.d/prod-server-tier.xml:ro

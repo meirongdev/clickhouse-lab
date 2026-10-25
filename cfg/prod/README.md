@@ -17,7 +17,7 @@
 | `users-B.xml` | 档 B profile 设置与约束 | `max_threads=8`，`max_concurrent_queries_for_all_users=200`（const） |
 | `users-C.xml` | 档 C profile 设置与约束 | `max_threads=16`，`max_concurrent_queries_for_all_users=375`（const） |
 
-档位 A、B、C 对应 [docs/production-shape.md](../docs/production-shape.md#二节点规格和数据量) 的三档规格，也就是 Aiven 的 business-16、business-32、business-64。更详尽的架构与参数说明见 [docs/aiven-production-specs.md](../../docs/aiven-production-specs.md)。
+档位 A、B、C 对应 [docs/production-shape.md](../../docs/production-shape.md#二节点规格和数据量) 的三档规格，也就是 Aiven 的 business-16、business-32、business-64。更详尽的架构与参数说明见 [docs/aiven-production-specs.md](../../docs/aiven-production-specs.md)。
 
 ## 二、与上游开源默认值的关键差异
 

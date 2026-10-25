@@ -3,7 +3,7 @@
 本文档系统评估托管平台（Aiven for ClickHouse）从 **25.3 LTS 升级到 25.8 LTS**（平台截止时间 2026-10-31）对当前生产已知问题的解决能力、新特性收益、行为变更，以及升级操作本身的风险与应对建议。
 
 - **标注约定** 同 [docs/README.md](README.md#标注约定)（`已核` / `lab 实测` / `生产事实` / `推断` / `待一手观察`）。
-- **版本基准**：当前 Lab 集群钉在 25.3.14.14（锁定生产 25.3.14.1）；25.8 目标版本的源码基准为 `v25.8.33.6-lts`。生产钱包集群已于 09-28 运行在 25.8.33.1 上（生产事实），可作为运行参照。
+- **版本基准**：当前 Lab 集群钉在 25.3.14.14（锁定生产 25.3.14.1）；25.8 目标版本的源码基准为 `v25.8.33.6-lts`。生产钱包集群已于 09-28 运行在 25.8.33.1 上（生产事实），可作为运行参照。实验 29 另在 25.8.33.6（A 档生产设置的三副本，`docker-compose.scale-cluster.yml`）上复跑过，18 条断言全过（lab 实测，[results/25.8/29-async-insert-dedup-token.log](../results/25.8/29-async-insert-dedup-token.log)）。
 - 集群架构与三档规格定义见 [aiven-production-specs.md](aiven-production-specs.md)；已知问题与排查机制见 [mechanism-map.md](mechanism-map.md) 与 [knowledge-map.md](knowledge-map.md)。
 
 ---
@@ -16,7 +16,7 @@
    - 轻量删除（Lightweight Delete）在 25.8 中**依然没有自动分区裁剪功能**，不带 `IN PARTITION` 依然会触发全表扫描与硬链接克隆。
    - Aiven 控制面在 25.8 上**依然将 `database_atomic_delay_before_drop_table_sec` 设为 0**，删表仍旧无 `UNDROP` 保护。
 2. **25.8 带来的主要收益在查询侧**：
-   - 跳数索引在 `FINAL` 查询下正式生效（`use_skip_indexes_if_final = 1`），为未来明细表切换 `ReplicatedReplacingMergeTree` + `FINAL` 提供了更好的范围过滤性能。
+   - 跳数索引在 `FINAL` 查询下正式生效（`use_skip_indexes_if_final = 1`），为未来明细表切换 `ReplicatedReplacingMergeTree` + `FINAL` 提供了更好的范围过滤性能；能剪掉多少看过滤列的分布，见第三节第 1 条。
    - 引入了跳数索引批量过滤（`secondary_indices_enable_bulk_filtering`）和表达式编译（`compile_expressions`）。
 3. **升级过程本身是引发新重复行的高危时段**：
    - Aiven 大版本升级采用**整组逐台销毁并重建 3 个底层 VM 节点（Rolling Node Replacement）**。
@@ -43,7 +43,7 @@
 
 1. **`FINAL` 查询跳数索引优化（25.6 引入）**：
    - 配置项：`use_skip_indexes_if_final = 1`，`use_skip_indexes_if_final_exact_mode = 1`。
-   - **影响**：在 25.3 中，`SELECT ... FROM table FINAL` 会忽略跳数索引（MinMax、Bloom Filter），直接按主键扫描全部候选 mark。25.8 在精确模式下允许跳数索引在折叠前先行裁剪 part / mark。生产 `events_wide` 表建有 3 个 minmax 和 5 个 bloom filter 索引，升级后在 `FINAL` 上的范围和点查性能将显著改善。
+   - **影响**：在 25.3 中，`SELECT ... FROM table FINAL` 会忽略跳数索引（MinMax、Bloom Filter），直接按主键扫描全部候选 mark。25.8 在精确模式下允许跳数索引在折叠前先行裁剪 part / mark。能剪掉多少取决于过滤列的值在 part 里是不是成段聚集：成段聚集的列开着只读约 5% 的行，关掉读全表；取值在每个 granule 里都出现的列（像均匀分布的 `tenant_id`、`user_id`）一个 granule 也剪不掉（lab 实测，实验 34，见 [scale-300m.md](scale-300m.md)）。生产 `events_wide` 表的 3 个 minmax 和 5 个 bloom filter 索引能不能吃到，要按各列的实际分布看（推断）。
 2. **跳数索引批量过滤（25.5 引入）**：
    - 配置项：`secondary_indices_enable_bulk_filtering = 1`。
    - **影响**：利用向量化计算对多个 mark 的跳数索引条件进行批量评估，降低单次查询在索引解压与匹配上的 CPU 占比。

@@ -78,7 +78,7 @@ review 文档的假设编号是 H1–H12，这里用 S 开头：
 - **三副本挤在一台机器上，耗时更不能比。** 三份数据写同一块盘，merge 也是三个副本各做各的（ReplicatedMergeTree 默认如此），磁盘 IO 是生产单个节点的三倍。
 - **容器限额的作用。** 限 CPU 和内存，是为了让 ClickHouse 看到和生产节点一样的资源：它按 cgroup 限额算 `max_threads` 和 `max_server_memory_usage`（推断，P0 要验，第六节）。
 - **CPU 限额不能超过虚拟机的核数。** Docker 直接拒绝（lab 上试过：12 核的虚拟机上 `--cpus 16`报 `range of CPUs is from 0.01 to 12.00, as there are only 12 CPUs available`）。虚拟机不到 16 核时，C 档的容器只能限到虚拟机的核数，再显式设 `max_threads = 16`，让查询的并行度和生产对齐（推断：每个线程各攒一份哈希表，内存跟着线程数走；耗时会偏慢）。
-- **为什么三亿行不能降级到 A 档（4c16g）跑：** A 档在 16 GB 内存下的 `max_server_memory_usage` 只有 10.67 GB，单查询上限约 8–10 GB；且 4 vCPU 仅有 2 个后台 Merge 线程。三亿行宽表（约 50 GB）的写入和 `ReplacingMergeTree` 去重合并速度严重脱节，会立刻堆积 Part 抛出 `Too many parts`；而全分区 `FINAL` 归并树状态在几千万行时就会打爆 10 GB 内存上限导致 OOM（分析见 [aiven-production-specs.md 第二节](aiven-production-specs.md#2-专项评估3-节点-4c16gb-能否支撑单日分区-3-亿条-replacingmergetree)）。三亿行必须在 C 档（16c64g）上压测。
+- **为什么三亿行要按 C 档跑：** 生产上三亿多行的那一档是 16c64g（production-shape.md 第二节），要带到生产的数就得照它限资源。R2 按 `(id, settle_ms, rev)` 做 `GROUP BY … HAVING count() > 1`，状态大小跟键数走：25.8 上 `uniqExact` 每行约 60–65 B，三亿行约 18 GiB（lab 实测，实验 31–33，见 [scale-300m.md](scale-300m.md)），`GROUP BY` 存完整的键只会更大（推断）。A 档的服务端上限只有 9.94 GiB，只能靠外部聚合落盘，量出来的耗时不代表 C 档。
 
 ## 四、造数据
 

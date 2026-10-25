@@ -2,7 +2,7 @@
 
 这一份讲这个仓库反复用到的 ClickHouse 基础机制：一行数据从写进来、存成文件、被合并、被复制，到被查出来，各经过什么。每一节最后写对这套生产意味着什么，以及仓库里哪个实验能直接看到。
 
-版本按 25.3（lab 实跑 25.3.14.14），标注沿用 [README.md](README.md#标注约定)。文中的默认值是 lab 上读到的，生产上 Aiven 改没改过待核（[production-shape.md 第七节](production-shape.md#七和大规模有关的默认值)）。
+版本按 25.3（lab 实跑 25.3.14.14），标注沿用 [README.md](README.md#标注约定)。文中的默认值是 lab 上读到的，生产上 Aiven 改没改过待核（[production-shape.md 第七节](production-shape.md#七和大规模有关的默认值与生产实测对照)）。
 
 ## 一、整体
 

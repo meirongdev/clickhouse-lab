@@ -276,6 +276,7 @@ qn 3 "SYSTEM START MERGES $T" >/dev/null
 section "6、量一下「几毫秒」：重建和换分区各花多久（lab 规模：当天 $N 行）"
 mk_load; R1; R2; R3; R5
 for n in 1 2 3; do qn $n "SYSTEM FLUSH LOGS" >/dev/null; done
+# 按微秒卡在这一轮的快照时刻之后：5b 段刚往同名的 dedup 表写过两条，留一秒余量会把它们也算进 R3
 q1 "SELECT multiIf(query ILIKE 'ALTER TABLE $T REPLACE%', 'R5 换分区', query ILIKE 'INSERT INTO ${T}_dedup%', 'R3 重建',
                    query ILIKE 'ALTER TABLE ${T}_bak ATTACH%', 'R1 快照', 'R2 重复键') AS step,
            count() AS statements, sum(query_duration_ms) AS ms, sum(written_rows) AS written_rows, sum(read_rows) AS read_rows
@@ -283,7 +284,7 @@ q1 "SELECT multiIf(query ILIKE 'ALTER TABLE $T REPLACE%', 'R5 换分区', query 
     WHERE type = 'QueryFinish' AND event_time >= now() - 120 AND current_database = currentDatabase()
       AND (query ILIKE 'ALTER TABLE $T REPLACE%' OR query ILIKE 'INSERT INTO ${T}_dedup%'
            OR query ILIKE 'ALTER TABLE ${T}_bak ATTACH%' OR query ILIKE 'INSERT INTO ${T}_dupkeys%')
-      AND query_start_time >= toDateTime(toDateTime64('$T_SNAP', 6)) - 1
+      AND query_start_time_microseconds >= toDateTime64('$T_SNAP', 6)
     GROUP BY step ORDER BY step FORMAT TSVWithNames"
 note "换分区本身不写数据（written_rows 0）；R3 把整天分区读一遍、写一遍（written_rows = 当天行数）。"
 note "lab 只有 10 万行，两步耗时看不出差别；到生产一千多万行，时间应该主要花在 R3——这是推断："
